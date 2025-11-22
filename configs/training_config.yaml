@@ -1,0 +1,52 @@
+# TIGAS Training Configuration
+# High-performance configuration for large-scale training
+
+model:
+  img_size: 256
+  in_channels: 3
+  base_channels: 64  # Larger model
+  feature_dim: 512   # Larger feature dimension
+  num_attention_heads: 8
+  dropout: 0.15
+  pretrained_backbone: false
+
+training:
+  num_epochs: 200
+  batch_size: 64
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  optimizer: adamw
+  scheduler: cosine
+  warmup_epochs: 10
+  min_lr: 0.000001
+
+  # Training optimizations
+  gradient_accumulation_steps: 2
+  max_grad_norm: 1.0
+  use_amp: true
+
+  # Early stopping
+  early_stopping_patience: 20
+
+data:
+  train_split: 0.85
+  val_split: 0.10
+  test_split: 0.05
+  num_workers: 8
+  augment_level: heavy
+  pin_memory: true
+  use_cache: false
+
+loss:
+  regression_weight: 1.0
+  classification_weight: 0.6
+  ranking_weight: 0.4
+  use_smooth_l1: true
+  margin: 0.3
+
+logging:
+  log_interval: 50
+  save_interval: 5
+  validate_interval: 1
+  use_tensorboard: true
+  output_dir: ./checkpoints_large
