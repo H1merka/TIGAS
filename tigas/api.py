@@ -30,6 +30,7 @@ import numpy as np
 from .models.tigas_model import TIGASModel, create_tigas_model
 from .metrics.tigas_metric import TIGASMetric
 from .data.transforms import get_inference_transforms
+from .utils.input_processor import InputProcessor
 
 
 class TIGAS(nn.Module):
@@ -97,7 +98,11 @@ class TIGAS(nn.Module):
         )
 
         # Image preprocessing
-        self.transform = get_inference_transforms(img_size=img_size, normalize=True)
+        self.input_processor = InputProcessor(
+            img_size=img_size,
+            device=self.device,
+            normalize=True
+        )
         self.img_size = img_size
 
     def forward(
@@ -119,42 +124,14 @@ class TIGAS(nn.Module):
         Returns:
             scores: TIGAS score(s) [B, 1] or dict with features
         """
-        # Handle different input types
+        # Handle directory case
         if isinstance(x, (str, Path)):
-            x = Path(x)
-            if x.is_dir():
-                return self.compute_directory(str(x))
-            else:
-                x = Image.open(x).convert('RGB')
+            path = Path(x)
+            if path.is_dir():
+                return self.compute_directory(str(path))
 
-        if isinstance(x, Image.Image):
-            x = self.transform(x).unsqueeze(0)  # [1, C, H, W]
-
-        elif isinstance(x, list):
-            # Process list of inputs
-            processed = []
-            for item in x:
-                if isinstance(item, (str, Path)):
-                    img = Image.open(item).convert('RGB')
-                    img = self.transform(img)
-                elif isinstance(item, Image.Image):
-                    img = self.transform(item)
-                elif isinstance(item, torch.Tensor):
-                    img = item
-                else:
-                    raise TypeError(f"Unsupported type in list: {type(item)}")
-                processed.append(img)
-            x = torch.stack(processed)
-
-        elif isinstance(x, torch.Tensor):
-            # Handle single image [C, H, W]
-            if x.ndim == 3:
-                x = x.unsqueeze(0)
-        else:
-            raise TypeError(f"Unsupported input type: {type(x)}")
-
-        # Ensure on correct device
-        x = x.to(self.device)
+        # Process input using InputProcessor
+        x = self.input_processor.process(x)
 
         # Compute TIGAS
         with torch.no_grad():
@@ -211,7 +188,12 @@ class TIGAS(nn.Module):
         for i in range(0, len(image_paths), batch_size):
             batch_paths = image_paths[i:i+batch_size]
             batch_images = [Image.open(p).convert('RGB') for p in batch_paths]
-            batch_tensors = torch.stack([self.transform(img) for img in batch_images])
+            
+            # Process images using InputProcessor
+            batch_tensors = torch.stack([
+                self.input_processor.transform(img) for img in batch_images
+            ])
+            batch_tensors = batch_tensors.to(self.device)
 
             scores = self.forward(batch_tensors)
             all_scores.append(scores.cpu().numpy())

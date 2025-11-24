@@ -98,6 +98,24 @@ class MultiScaleFeatureExtractor(nn.Module):
 
         return nn.ModuleList(layers)
 
+    def _process_stage(self, x: torch.Tensor, stage: nn.ModuleList) -> torch.Tensor:
+        """
+        Обработать один этап экстрактора признаков.
+
+        Args:
+            x: Входной тензор
+            stage: Список слоёв этапа
+
+        Returns:
+            Обработанный тензор
+        """
+        for layer in stage:
+            if isinstance(layer, CBAM):
+                x, _ = layer(x)
+            else:
+                x = layer(x)
+        return x
+
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
         Extract multi-scale features.
@@ -110,40 +128,13 @@ class MultiScaleFeatureExtractor(nn.Module):
                      [scale1/2, scale1/4, scale1/8, scale1/16]
         """
         features = []
-
         x = self.stem(x)
 
-        # Stage 1: 1/2 resolution
-        for layer in self.stage1:
-            if isinstance(layer, CBAM):
-                x, _ = layer(x)
-            else:
-                x = layer(x)
-        features.append(x)
-
-        # Stage 2: 1/4 resolution
-        for layer in self.stage2:
-            if isinstance(layer, CBAM):
-                x, _ = layer(x)
-            else:
-                x = layer(x)
-        features.append(x)
-
-        # Stage 3: 1/8 resolution
-        for layer in self.stage3:
-            if isinstance(layer, CBAM):
-                x, _ = layer(x)
-            else:
-                x = layer(x)
-        features.append(x)
-
-        # Stage 4: 1/16 resolution
-        for layer in self.stage4:
-            if isinstance(layer, CBAM):
-                x, _ = layer(x)
-            else:
-                x = layer(x)
-        features.append(x)
+        # Обработка всех этапов
+        stages = [self.stage1, self.stage2, self.stage3, self.stage4]
+        for stage in stages:
+            x = self._process_stage(x, stage)
+            features.append(x)
 
         return features
 
@@ -312,17 +303,23 @@ class StatisticalMomentEstimator(nn.Module):
         # Statistical pooling
         self.stat_pooling = StatisticalPooling('all')
 
+        # Calculate actual feature dimension after extraction
+        # Each extractor outputs feature_dim // 4 channels
+        # StatisticalPooling('all') returns 5 stats per channel
+        # We have len(self.scales) scales
+        actual_stat_dim = (feature_dim // 4) * 5 * len(self.scales)
+
         # Learnable prototypes for natural image statistics
         # These will be updated during training to capture natural distributions
         self.register_buffer(
             'natural_prototypes',
-            torch.randn(feature_dim * 5) * 0.01  # 5 moments per scale
+            torch.randn(actual_stat_dim) * 0.01
         )
         self.prototype_momentum = 0.99
 
         # Comparison network
         self.comparison_net = nn.Sequential(
-            nn.Linear(feature_dim * 5 * len(self.scales), feature_dim * 2),
+            nn.Linear(actual_stat_dim, feature_dim * 2),
             nn.LayerNorm(feature_dim * 2),
             nn.ReLU(inplace=True),
             nn.Dropout(0.1),

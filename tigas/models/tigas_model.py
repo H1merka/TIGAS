@@ -24,6 +24,17 @@ from .feature_extractors import (
 )
 from .attention import CrossModalAttention, SelfAttention
 from .layers import AdaptiveFeatureFusion
+from .constants import (
+    DEFAULT_FEATURE_DIM,
+    DEFAULT_BASE_CHANNELS,
+    DEFAULT_ATTENTION_HEADS,
+    DEFAULT_STAGES,
+    INPUT_MIN,
+    INPUT_MAX,
+    REGRESSION_HIDDEN_DIM_RATIO,
+    REGRESSION_FINAL_DIM_RATIO,
+    LINEAR_WEIGHT_STD
+)
 
 
 class TIGASModel(nn.Module):
@@ -48,9 +59,9 @@ class TIGASModel(nn.Module):
         self,
         img_size: int = 256,
         in_channels: int = 3,
-        base_channels: int = 32,
-        feature_dim: int = 256,
-        num_attention_heads: int = 8,
+        base_channels: int = DEFAULT_BASE_CHANNELS,
+        feature_dim: int = DEFAULT_FEATURE_DIM,
+        num_attention_heads: int = DEFAULT_ATTENTION_HEADS,
         dropout: float = 0.1,
         pretrained_backbone: bool = False
     ):
@@ -66,7 +77,7 @@ class TIGASModel(nn.Module):
         self.perceptual_extractor = MultiScaleFeatureExtractor(
             in_channels=in_channels,
             base_channels=base_channels,
-            stages=[2, 3, 4, 3]
+            stages=DEFAULT_STAGES
         )
 
         # Branch 2: Spectral analyzer
@@ -86,8 +97,7 @@ class TIGASModel(nn.Module):
         # Aggregate multi-scale perceptual features
         perceptual_channels = sum(self.perceptual_extractor.out_channels)
         self.perceptual_aggregator = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
+            # Вход уже плоский [B, perceptual_channels] после concat
             nn.Linear(perceptual_channels, feature_dim),
             nn.LayerNorm(feature_dim),
             nn.ReLU(inplace=True),
@@ -128,33 +138,64 @@ class TIGASModel(nn.Module):
 
         # ==================== Regression Head ====================
 
-        self.regression_head = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim // 2),
-            nn.LayerNorm(feature_dim // 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-
-            nn.Linear(feature_dim // 2, feature_dim // 4),
-            nn.LayerNorm(feature_dim // 4),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-
-            nn.Linear(feature_dim // 4, 1),
-            nn.Sigmoid()  # Output in [0, 1]
+        self.regression_head = self._build_regression_head(
+            feature_dim, dropout
         )
 
         # ==================== Auxiliary Heads (for training) ====================
 
         # Binary classification head (real vs fake)
-        self.binary_classifier = nn.Sequential(
-            nn.Linear(feature_dim, feature_dim // 2),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(feature_dim // 2, 2)
+        self.binary_classifier = self._build_classifier_head(
+            feature_dim, dropout
         )
 
         # Initialize weights
         self._initialize_weights()
+
+    def _normalize_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Нормализовать входной тензор в допустимый диапазон."""
+        if x.min() < INPUT_MIN or x.max() > INPUT_MAX:
+            x = torch.clamp(x, INPUT_MIN, INPUT_MAX)
+        return x
+
+    def _build_regression_head(
+        self,
+        feature_dim: int,
+        dropout: float
+    ) -> nn.Sequential:
+        """Построить регрессионную голову."""
+        hidden_dim = feature_dim // REGRESSION_HIDDEN_DIM_RATIO
+        final_dim = feature_dim // REGRESSION_FINAL_DIM_RATIO
+
+        return nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+
+            nn.Linear(hidden_dim, final_dim),
+            nn.LayerNorm(final_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+
+            nn.Linear(final_dim, 1),
+            nn.Sigmoid()  # Output in [0, 1]
+        )
+
+    def _build_classifier_head(
+        self,
+        feature_dim: int,
+        dropout: float
+    ) -> nn.Sequential:
+        """Построить классификационную голову."""
+        hidden_dim = feature_dim // REGRESSION_HIDDEN_DIM_RATIO
+
+        return nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 2)
+        )
 
     def _initialize_weights(self):
         """Initialize model weights."""
@@ -167,7 +208,7 @@ class TIGASModel(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.normal_(m.weight, 0, LINEAR_WEIGHT_STD)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
@@ -191,36 +232,69 @@ class TIGASModel(nn.Module):
                 - 'logits': Binary classification logits [B, 2] (optional, for training)
                 - 'features': Intermediate features (if return_features=True)
         """
-        batch_size = x.size(0)
+        # Normalize input
+        x = self._normalize_input(x)
 
-        # Ensure input is in valid range
-        if x.min() < -1.0 or x.max() > 1.0:
-            x = torch.clamp(x, -1.0, 1.0)
+        # Extract features from all branches
+        features = self._extract_features(x, update_prototypes)
 
-        # ==================== Feature Extraction ====================
+        # Apply cross-modal attention
+        attended_features = self._apply_cross_modal_attention(features)
 
+        # Fuse features adaptively
+        fused_features = self._fuse_features(attended_features)
+
+        # Generate outputs
+        outputs = self._generate_outputs(
+            fused_features, features, attended_features, return_features
+        )
+
+        return outputs
+
+    def _extract_features(
+        self,
+        x: torch.Tensor,
+        update_prototypes: bool
+    ) -> Dict[str, torch.Tensor]:
+        """Извлечь признаки из всех ветвей."""
         # 1. Multi-scale perceptual features
-        perceptual_features = self.perceptual_extractor(x)  # List of 4 feature maps
+        perceptual_features = self.perceptual_extractor(x)
 
-        # Concatenate and aggregate
+        # Aggregate multi-scale features
         perceptual_concat = torch.cat([
             F.adaptive_avg_pool2d(feat, 1).flatten(1)
             for feat in perceptual_features
         ], dim=1)
-        perceptual_feat = self.perceptual_aggregator(perceptual_concat)  # [B, feature_dim]
+        perceptual_feat = self.perceptual_aggregator(perceptual_concat)
 
         # 2. Spectral features
-        spectral_feat, spectral_aux = self.spectral_analyzer(x)  # [B, feature_dim]
+        spectral_feat, spectral_aux = self.spectral_analyzer(x)
 
         # 3. Statistical features
         statistical_feat, stat_aux = self.statistical_estimator(
             x, update_prototypes=update_prototypes
-        )  # [B, feature_dim]
+        )
 
-        # ==================== Cross-Modal Attention ====================
+        return {
+            'perceptual': perceptual_feat,
+            'perceptual_multi_scale': perceptual_features,
+            'spectral': spectral_feat,
+            'spectral_aux': spectral_aux,
+            'statistical': statistical_feat,
+            'statistical_aux': stat_aux
+        }
+
+    def _apply_cross_modal_attention(
+        self,
+        features: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
+        """Применить межмодальное внимание."""
+        perceptual_feat = features['perceptual']
+        spectral_feat = features['spectral']
+        statistical_feat = features['statistical']
 
         # Prepare for attention (add sequence dimension)
-        perceptual_seq = perceptual_feat.unsqueeze(1)  # [B, 1, feature_dim]
+        perceptual_seq = perceptual_feat.unsqueeze(1)
         spectral_seq = spectral_feat.unsqueeze(1)
         statistical_seq = statistical_feat.unsqueeze(1)
 
@@ -228,37 +302,52 @@ class TIGASModel(nn.Module):
         spectral_attended = self.spectral_to_perceptual_attn(
             query=spectral_seq,
             key_value=perceptual_seq
-        ).squeeze(1)  # [B, feature_dim]
+        ).squeeze(1)
 
         # Statistical attending to perceptual context
         stat_attended = self.stat_to_perceptual_attn(
             query=statistical_seq,
             key_value=perceptual_seq
-        ).squeeze(1)  # [B, feature_dim]
+        ).squeeze(1)
 
-        # ==================== Adaptive Feature Fusion ====================
+        return {
+            'perceptual': perceptual_feat,
+            'spectral_attended': spectral_attended,
+            'stat_attended': stat_attended
+        }
 
+    def _fuse_features(
+        self,
+        attended_features: Dict[str, torch.Tensor]
+    ) -> torch.Tensor:
+        """Объединить признаки адаптивно."""
         # Combine all features with learned weights
         fused_features = self.feature_fusion([
-            perceptual_feat,
-            spectral_attended,
-            stat_attended
-        ])  # [B, feature_dim]
+            attended_features['perceptual'],
+            attended_features['spectral_attended'],
+            attended_features['stat_attended']
+        ])
 
         # Apply self-attention for refinement
         fused_refined = self.self_attention(
             fused_features.unsqueeze(1)
-        ).squeeze(1)  # [B, feature_dim]
+        ).squeeze(1)
 
-        # ==================== Output Heads ====================
+        return fused_refined
 
+    def _generate_outputs(
+        self,
+        fused_features: torch.Tensor,
+        extracted_features: Dict[str, torch.Tensor],
+        attended_features: Dict[str, torch.Tensor],
+        return_features: bool
+    ) -> Dict[str, torch.Tensor]:
+        """Сгенерировать выходы модели."""
         # Main output: TIGAS score [0, 1]
-        tigas_score = self.regression_head(fused_refined)  # [B, 1]
+        tigas_score = self.regression_head(fused_features)
 
         # Auxiliary output: binary classification (for training)
-        class_logits = self.binary_classifier(fused_refined)  # [B, 2]
-
-        # ==================== Prepare Outputs ====================
+        class_logits = self.binary_classifier(fused_features)
 
         outputs = {
             'score': tigas_score,
@@ -267,15 +356,15 @@ class TIGASModel(nn.Module):
 
         if return_features:
             outputs['features'] = {
-                'perceptual': perceptual_feat,
-                'spectral': spectral_feat,
-                'statistical': statistical_feat,
-                'spectral_attended': spectral_attended,
-                'stat_attended': stat_attended,
-                'fused': fused_refined,
-                'spectral_aux': spectral_aux,
-                'statistical_aux': stat_aux,
-                'multi_scale': perceptual_features
+                'perceptual': extracted_features['perceptual'],
+                'spectral': extracted_features['spectral'],
+                'statistical': extracted_features['statistical'],
+                'spectral_attended': attended_features['spectral_attended'],
+                'stat_attended': attended_features['stat_attended'],
+                'fused': fused_features,
+                'spectral_aux': extracted_features['spectral_aux'],
+                'statistical_aux': extracted_features['statistical_aux'],
+                'multi_scale': extracted_features['perceptual_multi_scale']
             }
 
         return outputs
