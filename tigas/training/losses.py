@@ -80,8 +80,8 @@ class TIGASLoss(nn.Module):
 
             # Sample pairs
             num_pairs = min(len(real_scores), len(fake_scores))
-            real_sample = real_scores[:num_pairs]
-            fake_sample = fake_scores[:num_pairs]
+            real_sample = real_scores[:num_pairs].squeeze(1)  # [num_pairs, 1] -> [num_pairs]
+            fake_sample = fake_scores[:num_pairs].squeeze(1)  # [num_pairs, 1] -> [num_pairs]
 
             # Margin ranking loss: real_score should be > fake_score + margin
             target = torch.ones(num_pairs, device=scores.device)

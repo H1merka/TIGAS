@@ -335,3 +335,167 @@ class MetadataDataset(Dataset):
         metadata = {k: v for k, v in sample.items() if k not in ['image_path', 'label']}
 
         return img, label, metadata
+
+
+class CSVDataset(Dataset):
+    """
+    Dataset loading from CSV annotation files.
+
+    Designed for datasets with pre-defined splits and CSV annotations.
+    Handles various path formats and automatically resolves file locations.
+
+    CSV Format:
+        image_path,label
+        images\\ADM\\0_real\\img.jpg,1
+        images\\ADM\\1_fake\\img.png,0
+
+    Features:
+    - Reads from CSV with image_path,label columns
+    - Handles Windows/Unix path separators automatically
+    - Supports relative and absolute paths
+    - Extracts generator information from paths
+    - Optional image caching for faster training
+    """
+
+    def __init__(
+        self,
+        csv_file: str,
+        root_dir: str,
+        transform: Optional[Callable] = None,
+        use_cache: bool = False,
+        validate_paths: bool = True
+    ):
+        """
+        Args:
+            csv_file: Path to CSV file with columns: image_path, label
+            root_dir: Root directory for resolving relative paths
+            transform: Image transformations
+            use_cache: Whether to cache loaded images in memory
+            validate_paths: Whether to validate all image paths exist
+        """
+        import pandas as pd
+
+        self.root_dir = Path(root_dir)
+        self.transform = transform
+        self.use_cache = use_cache
+        self.cache = {} if use_cache else None
+
+        # Load CSV
+        csv_path = Path(csv_file)
+        if not csv_path.is_absolute():
+            csv_path = self.root_dir / csv_path
+
+        if not csv_path.exists():
+            raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+        # Store CSV directory for resolving relative image paths
+        csv_dir = csv_path.parent
+
+        self.df = pd.read_csv(csv_path)
+
+        # Validate columns
+        if 'image_path' not in self.df.columns or 'label' not in self.df.columns:
+            raise ValueError(f"CSV must have 'image_path' and 'label' columns. Found: {self.df.columns.tolist()}")
+
+        # Convert paths to Path objects and make absolute
+        self.samples = []
+        invalid_count = 0
+
+        for idx, row in self.df.iterrows():
+            img_path_str = str(row['image_path'])
+            label = float(row['label'])
+
+            # Convert backslashes to forward slashes for cross-platform compatibility
+            img_path_str = img_path_str.replace('\\', '/')
+
+            # Build full path
+            img_path = Path(img_path_str)
+            if not img_path.is_absolute():
+                # Relative path - resolve relative to CSV directory
+                img_path = csv_dir / img_path
+
+            # Validate path exists if requested
+            if validate_paths:
+                if not img_path.exists():
+                    invalid_count += 1
+                    continue
+
+            # Extract generator name from path (optional metadata)
+            generator = self._extract_generator(img_path_str)
+
+            self.samples.append({
+                'path': str(img_path),
+                'label': label,
+                'generator': generator
+            })
+
+        if len(self.samples) == 0:
+            raise ValueError(f"No valid images found in CSV: {csv_path}")
+
+        if invalid_count > 0:
+            print(f"Warning: {invalid_count} invalid paths skipped from CSV")
+
+        # Print statistics
+        real_count = sum(1 for s in self.samples if s['label'] == 1.0)
+        fake_count = len(self.samples) - real_count
+        print(f"CSVDataset loaded from {csv_path.name}:")
+        print(f"  Total: {len(self.samples)} images")
+        print(f"  Real: {real_count} ({real_count/len(self.samples)*100:.1f}%)")
+        print(f"  Fake: {fake_count} ({fake_count/len(self.samples)*100:.1f}%)")
+
+    def _extract_generator(self, path_str: str) -> str:
+        """
+        Extract generator name from path.
+        E.g., 'images/ADM/0_real/img.jpg' -> 'ADM'
+        """
+        parts = path_str.split('/')
+        # Look for common generator names in path
+        generators = ['ADM', 'biggan', 'DALLE2', 'face', 'gaugan', 'Glide',
+                     'Midjourney', 'sd_xl', 'sd14', 'sd15', 'stargan', 'VQDM', 'wuk']
+
+        for part in parts:
+            if part in generators:
+                return part
+
+        return 'unknown'
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        sample = self.samples[idx]
+        img_path = sample['path']
+        label = sample['label']
+
+        # Load from cache if available
+        if self.use_cache and img_path in self.cache:
+            img = self.cache[img_path]
+        else:
+            try:
+                img = Image.open(img_path).convert('RGB')
+                if self.use_cache:
+                    self.cache[img_path] = img
+            except Exception as e:
+                raise RuntimeError(f"Failed to load image {img_path}: {e}")
+
+        # Apply transforms
+        if self.transform is not None:
+            img = self.transform(img)
+
+        label = torch.tensor([label], dtype=torch.float32)
+
+        return img, label
+
+    def get_generator_stats(self) -> dict:
+        """Get statistics per generator."""
+        from collections import defaultdict
+        stats = defaultdict(lambda: {'real': 0, 'fake': 0})
+
+        for sample in self.samples:
+            gen = sample['generator']
+            if sample['label'] == 1.0:
+                stats[gen]['real'] += 1
+            else:
+                stats[gen]['fake'] += 1
+
+        return dict(stats)

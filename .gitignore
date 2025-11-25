@@ -212,3 +212,6 @@ CLAUDE.md
 
 # models's weights and cache
 weights/
+
+# directory with project documents
+docs/

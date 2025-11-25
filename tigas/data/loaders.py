@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, random_split
 from typing import Tuple, Optional, Dict
 from pathlib import Path
 
-from .dataset import TIGASDataset, RealFakeDataset, PairedDataset
+from .dataset import TIGASDataset, RealFakeDataset, PairedDataset, CSVDataset
 from .transforms import get_train_transforms, get_val_transforms
 
 
@@ -135,3 +135,130 @@ def create_inference_loader(
     )
 
     return loader
+
+
+def create_dataloaders_from_csv(
+    data_root: str,
+    train_csv: str = 'train/annotations01.csv',
+    val_csv: str = 'val/annotations01.csv',
+    test_csv: str = 'test/annotations01.csv',
+    batch_size: int = 32,
+    img_size: int = 256,
+    num_workers: int = 4,
+    augment_level: str = 'medium',
+    pin_memory: bool = True,
+    shuffle: bool = True,
+    use_cache: bool = False,
+    validate_paths: bool = True
+) -> Dict[str, DataLoader]:
+    """
+    Create train/val/test dataloaders from CSV annotation files.
+
+    Designed for datasets with pre-defined splits in CSV format.
+    This is ideal for TIGAS dataset structure where train/val/test
+    are already separated with CSV annotations.
+
+    Args:
+        data_root: Root directory containing CSV files and images
+                  E.g., 'C:/Dev/dataset/dataset/TIGAS_dataset/TIGAS'
+        train_csv: Path to training CSV (relative to data_root or absolute)
+        val_csv: Path to validation CSV (relative to data_root or absolute)
+        test_csv: Path to test CSV (relative to data_root or absolute)
+        batch_size: Batch size
+        img_size: Image size
+        num_workers: Number of worker processes
+        augment_level: Augmentation level for training ('light', 'medium', 'heavy')
+        pin_memory: Whether to pin memory for faster GPU transfer
+        shuffle: Whether to shuffle training data
+        use_cache: Whether to cache loaded images in memory (use with caution for large datasets)
+        validate_paths: Whether to validate all image paths exist (slower but safer)
+
+    Returns:
+        Dictionary with 'train', 'val', 'test' dataloaders
+
+    Example:
+        >>> dataloaders = create_dataloaders_from_csv(
+        ...     data_root='C:/Dev/dataset/dataset/TIGAS_dataset/TIGAS',
+        ...     batch_size=16,
+        ...     img_size=256
+        ... )
+        >>> train_loader = dataloaders['train']
+    """
+    data_root = Path(data_root)
+
+    # Get transforms
+    train_transform = get_train_transforms(img_size, augment_level=augment_level)
+    val_transform = get_val_transforms(img_size)
+
+    # Create datasets
+    print("\n" + "="*60)
+    print("Creating dataloaders from CSV files")
+    print("="*60)
+
+    print("\n[1/3] Loading training dataset...")
+    train_dataset = CSVDataset(
+        csv_file=train_csv,
+        root_dir=str(data_root),
+        transform=train_transform,
+        use_cache=use_cache,
+        validate_paths=validate_paths
+    )
+
+    print("\n[2/3] Loading validation dataset...")
+    val_dataset = CSVDataset(
+        csv_file=val_csv,
+        root_dir=str(data_root),
+        transform=val_transform,
+        use_cache=use_cache,
+        validate_paths=validate_paths
+    )
+
+    print("\n[3/3] Loading test dataset...")
+    test_dataset = CSVDataset(
+        csv_file=test_csv,
+        root_dir=str(data_root),
+        transform=val_transform,
+        use_cache=use_cache,
+        validate_paths=validate_paths
+    )
+
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+
+    # Print summary
+    print("\n" + "="*60)
+    print("Dataloaders created successfully!")
+    print("="*60)
+    print(f"  Train: {len(train_dataset):,} samples, {len(train_loader):,} batches")
+    print(f"  Val:   {len(val_dataset):,} samples, {len(val_loader):,} batches")
+    print(f"  Test:  {len(test_dataset):,} samples, {len(test_loader):,} batches")
+    print("="*60 + "\n")
+
+    return {
+        'train': train_loader,
+        'val': val_loader,
+        'test': test_loader
+    }
