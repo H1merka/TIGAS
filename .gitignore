@@ -212,6 +212,7 @@ CLAUDE.md
 
 # models's weights and cache
 weights/
+checkpoints/
 
 # directory with project documents
 docs/
