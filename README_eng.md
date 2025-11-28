@@ -1,0 +1,320 @@
+# TIGAS - Trained Image Generation Authenticity Score
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-red.svg)](https://pytorch.org/)
+
+**TIGAS** is a neural network metric for assessing the authenticity and realism of images, designed to distinguish between real/natural images and AI-generated/fake images.
+
+## Description
+
+TIGAS provides a continuous score in the range [0, 1]:
+- **1.0** — natural/real image
+- **0.0** — generated/fake image
+
+### Key Features
+
+- **Multi-Modal Analysis**: combines complementary analysis approaches
+  - Perceptual features (multi-scale CNN)
+  - Spectral analysis (frequency domain)
+  - Statistical consistency (distribution analysis)
+  - Local-global coherence
+
+- **Fully Differentiable**: can be used as
+  - Image quality assessment metric
+  - Loss function for training generative models
+  - Evaluation metric for image generation tasks
+
+- **Flexible Deployment**:
+  - Model-based computation (trained neural network)
+  - Component-based computation (without trained model)
+
+## Installation
+
+### Basic Installation
+
+```bash
+git clone https://github.com/H1merka/TIGAS.git
+cd TIGAS
+pip install -r requirements.txt
+pip install -e .
+```
+
+### With CUDA Support
+
+```bash
+pip install -r requirements_cuda.txt
+```
+
+### Dependencies
+
+**Core Dependencies:**
+- PyTorch >= 2.2.0
+- torchvision >= 0.17.0
+- NumPy >= 1.24.0
+- SciPy >= 1.10.0
+- scikit-learn >= 1.3.0
+- Pillow >= 10.0.0
+- OpenCV >= 4.8.0
+- pandas >= 2.0.0
+
+## Quick Start
+
+### Python API
+
+```python
+from tigas import TIGAS, compute_tigas_score
+
+# Method 1: High-level function
+score = compute_tigas_score('image.jpg', checkpoint_path='model.pt')
+print(f"TIGAS Score: {score:.4f}")
+
+# Method 2: Object-oriented API
+tigas = TIGAS(checkpoint_path='model.pt', img_size=256, device='cuda')
+score = tigas('image.jpg')  # Single image
+scores = tigas(torch.randn(4, 3, 256, 256))  # Batch
+scores = tigas.compute_directory('path/to/images/')  # Directory
+
+# Method 3: As a loss function
+score = tigas(generated_images)
+loss = 1.0 - score.mean()  # Maximize authenticity
+loss.backward()
+```
+
+### Command Line
+
+```bash
+# Evaluate single image
+python scripts/evaluate.py --image path/to/image.jpg --checkpoint model.pt
+
+# Evaluate directory
+python scripts/evaluate.py --image_dir path/to/images/ --checkpoint model.pt --batch_size 32
+
+# With statistics and visualization
+python scripts/evaluate.py --image_dir images/ --output results.json --plot
+```
+
+## Training
+
+### Data Structure
+
+**Directory mode:**
+```
+dataset/
+├── real/
+│   ├── img1.jpg
+│   ├── img2.jpg
+│   └── ...
+└── fake/
+    ├── img1.jpg
+    ├── img2.jpg
+    └── ...
+```
+
+**CSV mode:**
+```
+dataset/
+├── train/
+│   ├── images/
+│   └── annotations01.csv
+├── val/
+│   └── ...
+└── test/
+    └── ...
+```
+
+CSV format: `image_path,label` (1 — real, 0 — fake)
+
+### Running Training
+
+```bash
+# Basic training
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --epochs 50 \
+  --batch_size 16 \
+  --lr 0.0001 \
+  --output_dir ./checkpoints
+
+# Training with CSV
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --use_csv \
+  --epochs 100
+
+# Resume training from checkpoint
+python scripts/train_script.py \
+  --data_root data/ \
+  --resume checkpoints/model.pt
+```
+
+### Training Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--data_root` | Path to data | Required |
+| `--epochs` | Number of epochs | 50 |
+| `--batch_size` | Batch size | 16 |
+| `--lr` | Learning rate | 0.0001 |
+| `--img_size` | Image size | 256 |
+| `--output_dir` | Checkpoint directory | ./checkpoints |
+| `--device` | Device (cuda/cpu) | cuda |
+
+## Architecture
+
+### TIGASModel
+
+Multi-branch neural network including:
+
+1. **Multi-Scale Feature Extractor**
+   - 4-stage CNN backbone (1/2, 1/4, 1/8, 1/16 resolutions)
+   - Preserves high-frequency details for artifact detection
+   - EfficientNet-inspired design
+
+2. **Spectral Analyzer**
+   - FFT-based frequency domain analysis
+   - Detection of GAN artifacts (checkerboard patterns, unnatural spectra)
+   - Radial profile extraction from power spectrum
+
+3. **Statistical Moment Estimator**
+   - Distribution consistency analysis
+   - Learnable natural image statistics
+   - Moment matching against natural image priors
+
+4. **Attention Mechanisms**
+   - Self-Attention for capturing long-range dependencies
+   - Cross-Modal Attention for fusing features from different modalities
+
+5. **Adaptive Feature Fusion**
+   - Learnable weighting of 3 feature streams
+   - Combines perceptual, spectral, and statistical features
+
+## Project Structure
+
+```
+TIGAS/
+├── tigas/                          # Main package
+│   ├── __init__.py                # Initialization and exports
+│   ├── api.py                     # High-level API (TIGAS class)
+│   │
+│   ├── models/                    # Neural network architectures
+│   │   ├── tigas_model.py        # Main TIGASModel architecture
+│   │   ├── feature_extractors.py # Feature extractors
+│   │   ├── attention.py          # Attention mechanisms
+│   │   ├── layers.py             # Custom layers
+│   │   └── constants.py          # Configuration constants
+│   │
+│   ├── metrics/                   # Metric computation modules
+│   │   ├── tigas_metric.py       # Main metric calculator
+│   │   └── components.py         # Metric components
+│   │
+│   ├── data/                      # Data loading and preprocessing
+│   │   ├── dataset.py            # Dataset classes
+│   │   ├── loaders.py            # DataLoader creation
+│   │   └── transforms.py         # Augmentations and transforms
+│   │
+│   ├── training/                  # Training infrastructure
+│   │   ├── trainer.py            # Main trainer class
+│   │   ├── losses.py             # Loss functions
+│   │   └── optimizers.py         # Optimizers and schedulers
+│   │
+│   └── utils/                     # Utilities
+│       ├── config.py             # Configuration management
+│       ├── input_processor.py    # Input data processing
+│       └── visualization.py      # Visualization
+│
+├── scripts/                       # Executable scripts
+│   ├── evaluate.py              # Evaluation/inference script
+│   ├── example_usage.py          # Usage examples
+│   └── train_script.py           # Training script
+│
+├── setup.py                     # Package configuration
+├── requirements.txt             # Dependencies
+├── requirements_cuda.txt        # CUDA dependencies
+└── LICENSE                      # MIT License
+```
+
+## Usage Examples
+
+### 1. Basic Usage
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt')
+score = tigas('test_image.jpg')
+print(f"Authenticity score: {score:.4f}")
+```
+
+### 2. Batch Processing
+
+```python
+from tigas import TIGAS
+import torch
+
+tigas = TIGAS(checkpoint_path='model.pt', device='cuda')
+images = torch.randn(8, 3, 256, 256)
+scores = tigas(images)
+print(f"Mean score: {scores.mean():.4f}")
+```
+
+### 3. Feature Extraction
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt', return_features=True)
+score, features = tigas('image.jpg')
+print(f"Feature dimension: {features.shape}")
+```
+
+### 4. Using as Loss Function
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt')
+
+# In generator training loop
+generated_images = generator(noise)
+authenticity_score = tigas(generated_images)
+loss = 1.0 - authenticity_score.mean()
+loss.backward()
+```
+
+### 5. Component-Based Metric
+
+```python
+from tigas.metrics import TIGASMetric
+
+metric = TIGASMetric(use_model=False)
+score = metric.compute(image_tensor)
+```
+
+## Image Requirements
+
+- **Formats**: JPG, JPEG, PNG, BMP
+- **Resolution**: default 256x256 (configurable)
+- Images are automatically resized if needed
+- Normalized to [-1, 1] range
+
+## Training Features
+
+- **Mixed Precision Training**: accelerated training with AMP
+- **Gradient Accumulation**: for larger effective batch sizes
+- **Learning Rate Scheduling**: cosine annealing, warmup
+- **Early Stopping**: automatic stopping on overfitting
+- **TensorBoard Logging**: training process visualization
+- **Checkpoint Management**: model saving and loading
+
+## License
+
+This project is distributed under the MIT License. See [LICENSE](LICENSE) for details.
+
+## Authors
+
+- Dmitrij Morgenshtern
+
+## Links
+
+- [GitHub Repository](https://github.com/H1merka/TIGAS)

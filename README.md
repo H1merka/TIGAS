@@ -1,0 +1,320 @@
+# TIGAS - Trained Image Generation Authenticity Score
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-red.svg)](https://pytorch.org/)
+
+**TIGAS** — нейросетевая метрика для оценки подлинности и реалистичности изображений, разработанная для различения реальных/натуральных изображений от сгенерированных ИИ/поддельных.
+
+## Описание
+
+TIGAS предоставляет непрерывную оценку в диапазоне [0, 1]:
+- **1.0** — натуральное/реальное изображение
+- **0.0** — сгенерированное/поддельное изображение
+
+### Ключевые особенности
+
+- **Мультимодальный анализ**: комбинирует взаимодополняющие подходы к анализу
+  - Перцептивные признаки (многомасштабная CNN)
+  - Спектральный анализ (частотная область)
+  - Статистическая согласованность (анализ распределений)
+  - Локально-глобальная когерентность
+
+- **Полностью дифференцируема**: может использоваться как
+  - Метрика оценки качества изображений
+  - Функция потерь для обучения генеративных моделей
+  - Метрика оценки для задач генерации изображений
+
+- **Гибкое развертывание**:
+  - Вычисление на основе модели (обученная нейросеть)
+  - Вычисление на основе компонентов (без обученной модели)
+
+## Установка
+
+### Базовая установка
+
+```bash
+git clone https://github.com/H1merka/TIGAS.git
+cd TIGAS
+pip install -r requirements.txt
+pip install -e .
+```
+
+### С поддержкой CUDA
+
+```bash
+pip install -r requirements_cuda.txt
+```
+
+### Зависимости
+
+**Основные зависимости:**
+- PyTorch >= 2.2.0
+- torchvision >= 0.17.0
+- NumPy >= 1.24.0
+- SciPy >= 1.10.0
+- scikit-learn >= 1.3.0
+- Pillow >= 10.0.0
+- OpenCV >= 4.8.0
+- pandas >= 2.0.0
+
+## Быстрый старт
+
+### Python API
+
+```python
+from tigas import TIGAS, compute_tigas_score
+
+# Метод 1: Высокоуровневая функция
+score = compute_tigas_score('image.jpg', checkpoint_path='model.pt')
+print(f"TIGAS Score: {score:.4f}")
+
+# Метод 2: Объектно-ориентированный API
+tigas = TIGAS(checkpoint_path='model.pt', img_size=256, device='cuda')
+score = tigas('image.jpg')  # Одно изображение
+scores = tigas(torch.randn(4, 3, 256, 256))  # Батч
+scores = tigas.compute_directory('path/to/images/')  # Директория
+
+# Метод 3: Как функция потерь
+score = tigas(generated_images)
+loss = 1.0 - score.mean()  # Максимизация подлинности
+loss.backward()
+```
+
+### Командная строка
+
+```bash
+# Оценка одного изображения
+python scripts/evaluate.py --image path/to/image.jpg --checkpoint model.pt
+
+# Оценка директории
+python scripts/evaluate.py --image_dir path/to/images/ --checkpoint model.pt --batch_size 32
+
+# С статистикой и визуализацией
+python scripts/evaluate.py --image_dir images/ --output results.json --plot
+```
+
+## Обучение
+
+### Структура данных
+
+**Режим директорий:**
+```
+dataset/
+├── real/
+│   ├── img1.jpg
+│   ├── img2.jpg
+│   └── ...
+└── fake/
+    ├── img1.jpg
+    ├── img2.jpg
+    └── ...
+```
+
+**Режим CSV:**
+```
+dataset/
+├── train/
+│   ├── images/
+│   └── annotations01.csv
+├── val/
+│   └── ...
+└── test/
+    └── ...
+```
+
+Формат CSV: `image_path,label` (1 — реальное, 0 — поддельное)
+
+### Запуск обучения
+
+```bash
+# Базовое обучение
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --epochs 50 \
+  --batch_size 16 \
+  --lr 0.0001 \
+  --output_dir ./checkpoints
+
+# Обучение с CSV
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --use_csv \
+  --epochs 100
+
+# Продолжение обучения с чекпоинта
+python scripts/train_script.py \
+  --data_root data/ \
+  --resume checkpoints/model.pt
+```
+
+### Параметры обучения
+
+| Параметр | Описание | По умолчанию |
+|----------|----------|--------------|
+| `--data_root` | Путь к данным | Обязательный |
+| `--epochs` | Количество эпох | 50 |
+| `--batch_size` | Размер батча | 16 |
+| `--lr` | Скорость обучения | 0.0001 |
+| `--img_size` | Размер изображения | 256 |
+| `--output_dir` | Директория чекпоинтов | ./checkpoints |
+| `--device` | Устройство (cuda/cpu) | cuda |
+
+## Архитектура
+
+### Модель TIGASModel
+
+Многоветвевая нейронная сеть, включающая:
+
+1. **Многомасштабный экстрактор признаков**
+   - 4-этапный CNN backbone (разрешения 1/2, 1/4, 1/8, 1/16)
+   - Сохраняет высокочастотные детали для обнаружения артефактов
+   - Дизайн, вдохновленный EfficientNet
+
+2. **Спектральный анализатор**
+   - Анализ частотной области на основе FFT
+   - Обнаружение артефактов GAN (шахматные паттерны, неестественные спектры)
+   - Извлечение радиального профиля из спектра мощности
+
+3. **Статистический оценщик моментов**
+   - Анализ согласованности распределений
+   - Обучаемая статистика натуральных изображений
+   - Сопоставление моментов с априорными данными
+
+4. **Механизмы внимания**
+   - Self-Attention для захвата дальних зависимостей
+   - Cross-Modal Attention для слияния признаков разных модальностей
+
+5. **Адаптивное слияние признаков**
+   - Обучаемое взвешивание 3 потоков признаков
+   - Комбинирование перцептивных, спектральных и статистических признаков
+
+## Структура проекта
+
+```
+TIGAS/
+├── tigas/                          # Основной пакет
+│   ├── __init__.py                # Инициализация и экспорты
+│   ├── api.py                     # Высокоуровневый API (класс TIGAS)
+│   │
+│   ├── models/                    # Архитектуры нейросетей
+│   │   ├── tigas_model.py        # Основная модель TIGASModel
+│   │   ├── feature_extractors.py # Экстракторы признаков
+│   │   ├── attention.py          # Механизмы внимания
+│   │   ├── layers.py             # Пользовательские слои
+│   │   └── constants.py          # Константы конфигурации
+│   │
+│   ├── metrics/                   # Модули вычисления метрик
+│   │   ├── tigas_metric.py       # Основной калькулятор метрики
+│   │   └── components.py         # Компоненты метрик
+│   │
+│   ├── data/                      # Загрузка и предобработка данных
+│   │   ├── dataset.py            # Классы датасетов
+│   │   ├── loaders.py            # Создание DataLoader
+│   │   └── transforms.py         # Аугментации и трансформации
+│   │
+│   ├── training/                  # Инфраструктура обучения
+│   │   ├── trainer.py            # Основной класс тренера
+│   │   ├── losses.py             # Функции потерь
+│   │   └── optimizers.py         # Оптимизаторы и планировщики
+│   │
+│   └── utils/                     # Утилиты
+│       ├── config.py             # Управление конфигурацией
+│       ├── input_processor.py    # Обработка входных данных
+│       └── visualization.py      # Визуализация
+│
+├── scripts/                       # Исполняемые скрипты
+│   ├── evaluate.py              # Скрипт оценки/инференса
+│   ├── example_usage.py          # Примеры использования
+│   └── train_script.py           # Скрипт обучения
+│
+├── setup.py                     # Конфигурация пакета
+├── requirements.txt             # Зависимости
+├── requirements_cuda.txt        # CUDA-зависимости
+└── LICENSE                      # Лицензия MIT
+```
+
+## Примеры использования
+
+### 1. Базовое использование
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt')
+score = tigas('test_image.jpg')
+print(f"Оценка подлинности: {score:.4f}")
+```
+
+### 2. Пакетная обработка
+
+```python
+from tigas import TIGAS
+import torch
+
+tigas = TIGAS(checkpoint_path='model.pt', device='cuda')
+images = torch.randn(8, 3, 256, 256)
+scores = tigas(images)
+print(f"Средняя оценка: {scores.mean():.4f}")
+```
+
+### 3. Извлечение признаков
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt', return_features=True)
+score, features = tigas('image.jpg')
+print(f"Размерность признаков: {features.shape}")
+```
+
+### 4. Использование как функции потерь
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt')
+
+# В цикле обучения генератора
+generated_images = generator(noise)
+authenticity_score = tigas(generated_images)
+loss = 1.0 - authenticity_score.mean()
+loss.backward()
+```
+
+### 5. Метрика на основе компонентов
+
+```python
+from tigas.metrics import TIGASMetric
+
+metric = TIGASMetric(use_model=False)
+score = metric.compute(image_tensor)
+```
+
+## Требования к изображениям
+
+- **Форматы**: JPG, JPEG, PNG, BMP
+- **Разрешение**: по умолчанию 256x256 (настраивается)
+- Изображения автоматически масштабируются при необходимости
+- Нормализация в диапазон [-1, 1]
+
+## Возможности обучения
+
+- **Mixed Precision Training**: ускоренное обучение с AMP
+- **Gradient Accumulation**: для больших эффективных размеров батча
+- **Learning Rate Scheduling**: косинусное затухание, warmup
+- **Early Stopping**: автоматическая остановка при переобучении
+- **TensorBoard Logging**: визуализация процесса обучения
+- **Checkpoint Management**: сохранение и загрузка моделей
+
+## Лицензия
+
+Проект распространяется под лицензией MIT. Подробности см. в файле [LICENSE](LICENSE).
+
+## Авторы
+
+- Дмитрий Моргенштерн
+
+## Ссылки
+
+- [Репозиторий GitHub](https://github.com/H1merka/TIGAS)
