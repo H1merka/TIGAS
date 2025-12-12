@@ -103,7 +103,7 @@ def get_train_transforms(
     augment_level: str = 'medium'
 ) -> T.Compose:
     """
-    Get training transforms.
+    Get training transforms with optimized augmentations for speed.
 
     Args:
         img_size: Target image size
@@ -111,42 +111,38 @@ def get_train_transforms(
         augment_level: 'light', 'medium', or 'heavy'
 
     Returns:
-        transforms: Composed transforms
+        transforms: Composed transforms (optimized for GPU speed)
     """
     transforms_list = []
 
-    # Resize and crop
+    # Resize and crop (fast operations)
     transforms_list.extend([
         T.Resize(int(img_size * 1.1)),
         T.RandomCrop(img_size),
     ])
 
-    # Basic augmentations
+    # Basic augmentations (lightweight only)
     if augment_level in ['medium', 'heavy']:
         transforms_list.extend([
             T.RandomHorizontalFlip(p=0.5),
             ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.2,
-                hue=0.1
+                brightness=0.15,
+                contrast=0.15,
+                saturation=0.15,
+                hue=0.05
             ),
         ])
 
-    # Heavy augmentations
+    # Minimal rotation for medium (removed heavy augmentations)
     if augment_level == 'heavy':
-        transforms_list.extend([
-            T.RandomRotation(15),
-            T.RandomPerspective(distortion_scale=0.2, p=0.5),
-            RandomGaussianBlur(),
-        ])
+        transforms_list.append(T.RandomRotation(10))
 
     # Convert to tensor
     transforms_list.append(T.ToTensor())
 
-    # Add noise and compression (on tensors)
-    if augment_level in ['medium', 'heavy']:
-        transforms_list.append(RandomGaussianNoise(std_range=(0.0, 0.02)))
+    # Skip heavy tensor augmentations for speed
+    # (RandomGaussianNoise and RandomGaussianBlur removed)
+    # These can be added back if GPU memory allows
 
     # Normalization
     if normalize:

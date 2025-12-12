@@ -15,7 +15,7 @@ def create_dataloaders(
     data_root: str,
     batch_size: int = 32,
     img_size: int = 256,
-    num_workers: int = 4,
+    num_workers: int = 12,
     train_split: float = 0.8,
     val_split: float = 0.1,
     augment_level: str = 'medium',
@@ -144,7 +144,7 @@ def create_dataloaders_from_csv(
     test_csv: str = 'test/annotations01.csv',
     batch_size: int = 32,
     img_size: int = 256,
-    num_workers: int = 4,
+    num_workers: int = 12,
     augment_level: str = 'medium',
     pin_memory: bool = True,
     shuffle: bool = True,
@@ -229,7 +229,9 @@ def create_dataloaders_from_csv(
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        drop_last=True
+        drop_last=True,
+        prefetch_factor=2,  # ← уменьши очередь (было 8)
+        persistent_workers=True  # ← переиспользуй workers
     )
 
     val_loader = DataLoader(

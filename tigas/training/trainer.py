@@ -44,11 +44,11 @@ class TIGASTrainer:
         use_amp: bool = True,
         gradient_accumulation_steps: int = 1,
         max_grad_norm: float = 1.0,
-        log_interval: int = 10,
+        log_interval: int = 50,
         save_interval: int = 1,
-        validate_interval: int = 1,
+        validate_interval: int = 5,
         early_stopping_patience: int = 10,
-        use_tensorboard: bool = False
+        use_tensorboard: bool = False,
     ):
         """
         Args:

@@ -430,8 +430,6 @@ class CSVDataset(Dataset):
             img_path_str = str(row['image_path'])
             label = float(row['label'])
 
-            label = 1.0 - label
-
             # Convert backslashes to forward slashes for cross-platform compatibility
             img_path_str = img_path_str.replace('\\', '/')
 

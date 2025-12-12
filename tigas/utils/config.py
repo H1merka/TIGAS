@@ -40,7 +40,7 @@ def get_default_config() -> Dict[str, Any]:
         'data': {
             'train_split': 0.8,
             'val_split': 0.1,
-            'num_workers': 4,
+            'num_workers': 12,
             'augment_level': 'medium',
             'pin_memory': True
         },
@@ -52,10 +52,10 @@ def get_default_config() -> Dict[str, Any]:
             'margin': 0.5
         },
         'logging': {
-            'log_interval': 10,
+            'log_interval': 50,
             'save_interval': 1,
-            'validate_interval': 1,
-            'use_tensorboard': True
+            'validate_interval': 5,
+            'use_tensorboard': False
         }
     }
 

@@ -57,8 +57,8 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=16,
-        help="Размер батча (по умолчанию: 16)"
+        default=32,
+        help="Размер батча (по умолчанию: 32, было 16)"
     )
     parser.add_argument(
         "--lr",
@@ -69,8 +69,8 @@ def parse_args():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=4,
-        help="Количество воркеров для загрузки данных (по умолчанию: 4)"
+        default=12,
+        help="Количество воркеров для загрузки данных (по умолчанию: 12, было 4)"
     )
     
     # Опциональные аргументы - выход
