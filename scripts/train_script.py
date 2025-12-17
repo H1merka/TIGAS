@@ -57,20 +57,20 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=32,
-        help="Размер батча (по умолчанию: 32, было 16)"
+        default=16,
+        help="Размер батча (по умолчанию: 16 для стабильности)"
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=0.0001,
-        help="Скорость обучения (по умолчанию: 0.0001)"
+        default=0.0000125,
+        help="Скорость обучения (по умолчанию: 0.0000125, очень консервативная для AMP стабильности)"
     )
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=12,
-        help="Количество воркеров для загрузки данных (по умолчанию: 12, было 4)"
+        default=4,
+        help="Количество воркеров для загрузки данных (по умолчанию: 4)"
     )
     
     # Опциональные аргументы - выход
@@ -103,6 +103,27 @@ def parse_args():
         "--use_csv",
         action="store_true",
         help="Использовать CSV файлы аннотаций вместо структуры real/fake"
+    )
+
+    # Опциональные аргументы - смешанная точность
+    parser.add_argument(
+        "--use_amp",
+        action="store_true",
+        default=False,
+        help="Использовать Automatic Mixed Precision (по умолчанию: False для стабильности)"
+    )
+    parser.add_argument(
+        "--no_use_amp",
+        action="store_false",
+        dest="use_amp",
+        help="Отключить Automatic Mixed Precision"
+    )
+
+    # Опциональные аргументы - оптимизация памяти
+    parser.add_argument(
+        "--grad_checkpointing",
+        action="store_true",
+        help="Использовать gradient checkpointing для сохранения памяти (медленнее)"
     )
 
     return parser.parse_args()
@@ -328,7 +349,7 @@ def main():
         },
         device=device,
         output_dir=str(output_dir),
-        use_amp=(device == 'cuda'),  # Mixed precision только для GPU
+        use_amp=args.use_amp and (device == 'cuda'),  # AMP только на GPU и если включено
         gradient_accumulation_steps=1,
         max_grad_norm=1.0,
         log_interval=10,
@@ -341,39 +362,38 @@ def main():
     print(f"   [OK] Тренер инициализирован")
     print(f"   [ПУТЬ] Чекпоинты будут сохраняться в: {output_dir.absolute()}")
     
+    # Pre-training dataset check (optional but recommended)
+    print(f"\n[РЕКОМЕНДАЦИЯ] Перед началом обучения рекомендуется проверить датасет:")
+    print(f"   python scripts/check_dataset.py --data_root {args.data_root} --check_batches")
+    print(f"   Это займёт ~5-10 минут и помогает избежать NaN ошибок позже")
+    
     # Финальная проверка устройства
     if device == 'cuda':
-        print(f"   [GPU] Обучение будет выполняться на видеокарте (GPU)")
-        print(f"   [GPU] Mixed Precision (AMP) включен для ускорения")
+        print(f"\n   [GPU] Обучение будет выполняться на видеокарте (GPU)")
+        if args.use_amp:
+            print(f"   [GPU] Mixed Precision (AMP) включен для ускорения")
+        else:
+            print(f"   [GPU] Mixed Precision (AMP) отключен (будет медленнее)")
     else:
-        print(f"   [CPU] Обучение будет выполняться на процессоре (CPU)")
+        print(f"\n   [CPU] Обучение будет выполняться на процессоре (CPU)")
         print(f"   [CPU] Это будет медленнее, чем на GPU")
     
-    # Загрузка чекпоинта, если указан
+    # Загрузка чекпоинта, если указан (делегируем trainer'у)
     if args.resume:
         print(f"\n[ЗАГРУЗКА ЧЕКПОИНТА] {args.resume}")
         try:
-            checkpoint = torch.load(args.resume, map_location=device)
-            trainer.model.load_state_dict(checkpoint['model_state_dict'])
-            trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_epoch = checkpoint.get('epoch', 0) + 1
-            print(f"   [OK] Чекпоинт загружен (эпоха {start_epoch})")
+            trainer.load_checkpoint(args.resume)
+            print(f"   [OK] Чекпоинт загружен")
         except Exception as e:
             print(f"   [ОШИБКА] Ошибка при загрузке чекпоинта: {e}")
             print(f"   [ВНИМАНИЕ] Начинаем обучение с нуля")
-            start_epoch = 0
-    else:
-        start_epoch = 0
     
     # Обучение
     print(f"\n[НАЧАЛО ОБУЧЕНИЯ]...")
     print("="*60 + "\n")
     
     try:
-        trainer.train(
-            num_epochs=args.epochs,
-            resume_from=args.resume
-        )
+        trainer.train(num_epochs=args.epochs, resume_from=args.resume)
         
         print("\n" + "="*60)
         print("[УСПЕХ] ОБУЧЕНИЕ ЗАВЕРШЕНО УСПЕШНО!")

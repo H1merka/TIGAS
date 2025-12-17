@@ -55,7 +55,18 @@ class SelfAttention(nn.Module):
 
         # Scaled dot-product attention
         attn = (q @ k.transpose(-2, -1)) * self.scale  # [B, num_heads, N, N]
+        
+        # Clamp attention scores to prevent overflow
+        attn = torch.clamp(attn, min=-1e4, max=1e4)
+        
         attn = F.softmax(attn, dim=-1)
+        
+        # Replace any NaN from softmax with uniform attention
+        if torch.isnan(attn).any():
+            import warnings
+            warnings.warn("[ATTENTION] NaN detected in attention weights, using uniform distribution")
+            attn = torch.ones_like(attn) / attn.shape[-1]
+        
         attn = self.attn_dropout(attn)
 
         # Apply attention to values
@@ -132,7 +143,17 @@ class CrossModalAttention(nn.Module):
         if mask is not None:
             attn = attn.masked_fill(mask == 0, -1e9)
 
+        # Clamp before softmax to prevent overflow
+        attn = torch.clamp(attn, min=-1e4, max=1e4)
+        
         attn = F.softmax(attn, dim=-1)
+        
+        # Safety check for NaN
+        if torch.isnan(attn).any():
+            import warnings
+            warnings.warn("[CROSSMODAL ATTN] NaN in attention, using uniform")
+            attn = torch.ones_like(attn) / attn.shape[-1]
+        
         attn = self.attn_dropout(attn)
 
         # Apply attention

@@ -62,12 +62,43 @@ class TIGASLoss(nn.Module):
         scores = outputs['score']  # [B, 1]
         logits = outputs['logits']  # [B, 2]
 
+        # Validate inputs for NaN/Inf before computing loss
+        if torch.isnan(scores).any() or torch.isinf(scores).any():
+            import warnings
+            warnings.warn(f"[TIGAS LOSS] NaN/Inf detected in scores. Values: min={scores.min().item():.6f}, max={scores.max().item():.6f}")
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            import warnings
+            warnings.warn(f"[TIGAS LOSS] NaN/Inf detected in logits")
+
         # 1. Regression loss
         reg_loss = self.regression_loss(scores, labels)
+        
+        # CRITICAL: Stop training if NaN/Inf detected (don't mask it)
+        if torch.isnan(reg_loss) or torch.isinf(reg_loss):
+            raise RuntimeError(
+                f"[TIGAS LOSS] NaN/Inf in Regression Loss detected!\n"
+                f"Scores stats - min: {scores.min().item():.6f}, max: {scores.max().item():.6f}, "
+                f"mean: {scores.mean().item():.6f}, std: {scores.std().item():.6f}\n"
+                f"Labels stats - min: {labels.min().item():.6f}, max: {labels.max().item():.6f}, "
+                f"mean: {labels.mean().item():.6f}, std: {labels.std().item():.6f}\n"
+                f"This indicates a problematic batch (possibly corrupted images). "
+                f"Run: python scripts/check_dataset.py --data_root <dataset>"
+            )
 
         # 2. Classification loss
         class_labels = labels.squeeze(1).long()  # [B]
         cls_loss = self.classification_loss(logits, class_labels)
+        
+        # CRITICAL: Stop training if NaN/Inf detected (don't mask it)
+        if torch.isnan(cls_loss) or torch.isinf(cls_loss):
+            raise RuntimeError(
+                f"[TIGAS LOSS] NaN/Inf in Classification Loss detected!\n"
+                f"Logits stats - min: {logits.min().item():.6f}, max: {logits.max().item():.6f}, "
+                f"mean: {logits.mean().item():.6f}, std: {logits.std().item():.6f}\n"
+                f"Class labels: {class_labels.tolist()}\n"
+                f"This indicates a problematic batch (possibly corrupted images). "
+                f"Run: python scripts/check_dataset.py --data_root <dataset>"
+            )
 
         # 3. Ranking loss (for paired samples)
         # Encourage real images to have higher scores than fake images
@@ -88,8 +119,17 @@ class TIGASLoss(nn.Module):
             rank_loss = F.margin_ranking_loss(
                 real_sample, fake_sample, target, margin=self.margin
             )
+            # CRITICAL: Stop training if NaN/Inf detected (don't mask it)
+            if torch.isnan(rank_loss) or torch.isinf(rank_loss):
+                raise RuntimeError(
+                    f"[TIGAS LOSS] NaN/Inf in Ranking Loss detected!\n"
+                    f"Real scores: min={real_sample.min().item():.6f}, max={real_sample.max().item():.6f}\n"
+                    f"Fake scores: min={fake_sample.min().item():.6f}, max={fake_sample.max().item():.6f}\n"
+                    f"This indicates a problematic batch (possibly corrupted images). "
+                    f"Run: python scripts/check_dataset.py --data_root <dataset>"
+                )
         else:
-            rank_loss = torch.tensor(0.0, device=scores.device)
+            rank_loss = torch.tensor(0.0, device=scores.device, dtype=scores.dtype)
 
         # Total loss
         total_loss = (

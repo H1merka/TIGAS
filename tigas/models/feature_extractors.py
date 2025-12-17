@@ -374,6 +374,13 @@ class StatisticalMomentEstimator(nn.Module):
 
             # Compute statistical moments
             stats = self.stat_pooling(local_feat)
+            
+            # Diagnostic: Check for NaN in statistics
+            if torch.isnan(stats).any() or torch.isinf(stats).any():
+                import warnings
+                warnings.warn(f"[STAT] NaN/Inf in scale {scale} statistics, replacing with mean")
+                stats = torch.where(torch.isfinite(stats), stats, torch.zeros_like(stats))
+            
             multi_scale_stats.append(stats)
 
         # Concatenate all scales
@@ -385,6 +392,9 @@ class StatisticalMomentEstimator(nn.Module):
 
         # Compare with prototypes
         output = self.comparison_net(all_stats)
+        
+        # Clamp output to prevent extreme values
+        output = torch.clamp(output, min=-1e2, max=1e2)
 
         # Auxiliary outputs
         aux = {

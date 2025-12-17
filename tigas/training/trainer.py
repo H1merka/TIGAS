@@ -5,7 +5,7 @@ TIGAS Trainer - Main training loop with all bells and whistles.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+import torch.amp
 from pathlib import Path
 from typing import Dict, Optional, Callable
 import time
@@ -43,7 +43,7 @@ class TIGASTrainer:
         output_dir: str = './checkpoints',
         use_amp: bool = True,
         gradient_accumulation_steps: int = 1,
-        max_grad_norm: float = 1.0,
+        max_grad_norm: float = 0.5,
         log_interval: int = 50,
         save_interval: int = 1,
         validate_interval: int = 5,
@@ -91,7 +91,18 @@ class TIGASTrainer:
 
         # Training settings
         self.use_amp = use_amp and device == 'cuda'
-        self.scaler = GradScaler() if self.use_amp else None
+        # Very conservative GradScaler for numerical stability
+        # Lower init_scale + smaller growth_factor prevent overflow
+        if self.use_amp:
+            self.scaler = torch.amp.GradScaler(
+                'cuda',
+                init_scale=128.0,      # ← Снижено с 256 для консервативности
+                growth_factor=1.5,     # ← Медленный рост (было 2.0 по умолчанию)
+                backoff_factor=0.75,   # ← Быстрый откат (было 0.5)
+                growth_interval=100    # ← Реже повышать масштаб
+            )
+        else:
+            self.scaler = None
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.max_grad_norm = max_grad_norm
 
@@ -141,17 +152,42 @@ class TIGASTrainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            # Forward pass with AMP
-            with autocast(enabled=self.use_amp):
+            # Forward pass with AMP using modern torch.amp API
+            with torch.amp.autocast('cuda' if self.device == 'cuda' else 'cpu', enabled=self.use_amp):
                 outputs = self.model(
                     images,
                     return_features=False,
                     update_prototypes=True
                 )
 
+                # Pre-loss diagnostic: check model outputs for NaN
+                if torch.isnan(outputs['score']).any() or torch.isinf(outputs['score']).any():
+                    raise RuntimeError(
+                        f"[TRAINER] NaN/Inf detected in model score output at batch {batch_idx}\n"
+                        f"Score stats: min={outputs['score'].min():.6f}, max={outputs['score'].max():.6f}, "
+                        f"mean={outputs['score'].mean():.6f}, std={outputs['score'].std():.6f}\n"
+                        f"This indicates an issue in the model forward pass or input data.\n"
+                        f"Run: python scripts/check_dataset.py --data_root <dataset>"
+                    )
+
                 # Compute losses
                 losses = self.loss_fn(outputs, labels, self.model)
                 loss = losses['combined_total'] if 'combined_total' in losses else losses['total']
+
+                # CRITICAL: Check for NaN loss and STOP immediately
+                if torch.isnan(loss) or torch.isinf(loss):
+                    raise RuntimeError(
+                        f"[TRAINER] NaN/Inf loss at batch {batch_idx}\n"
+                        f"Loss breakdown:\n"
+                        f"  - Regression: {losses.get('regression', 'N/A')}\n"
+                        f"  - Classification: {losses.get('classification', 'N/A')}\n"
+                        f"  - Ranking: {losses.get('ranking', 'N/A')}\n"
+                        f"  - Total: {loss}\n"
+                        f"Probable cause: Corrupted image(s) in this batch (batch_idx={batch_idx})\n"
+                        f"Image indices in batch: {batch_idx * self.train_loader.batch_size} to "
+                        f"{min((batch_idx + 1) * self.train_loader.batch_size, len(self.train_loader.dataset))}\n"
+                        f"Action: Run check_dataset.py to validate and fix the dataset"
+                    )
 
                 # Scale loss for gradient accumulation
                 loss = loss / self.gradient_accumulation_steps
@@ -255,7 +291,7 @@ class TIGASTrainer:
         return val_losses
 
     def save_checkpoint(self, is_best: bool = False):
-        """Save model checkpoint."""
+        """Save model checkpoint with logging and error handling."""
         checkpoint = {
             'epoch': self.current_epoch,
             'global_step': self.global_step,
@@ -268,19 +304,31 @@ class TIGASTrainer:
             'val_history': self.val_history
         }
 
-        # Save regular checkpoint
         checkpoint_path = self.output_dir / f'checkpoint_epoch_{self.current_epoch}.pt'
-        torch.save(checkpoint, checkpoint_path)
+        checkpoint_path_str = str(checkpoint_path)
 
-        # Save best model
+        try:
+            # атомарная запись: сначала во временный файл, затем переименование
+            temp_path = checkpoint_path.with_suffix('.pt.tmp')
+            torch.save(checkpoint, str(temp_path))
+            temp_path.replace(checkpoint_path)  # атомарно переименовать
+            print(f"[checkpoint] saved: {checkpoint_path_str}")
+        except Exception as e:
+            print(f"[checkpoint] failed to save {checkpoint_path_str}: {e}", flush=True)
+
         if is_best:
-            best_path = self.output_dir / 'best_model.pt'
-            torch.save(checkpoint, best_path)
-            print(f"Saved best model to {best_path}")
+            try:
+                best_path = self.output_dir / 'best_model.pt'
+                torch.save(checkpoint, str(best_path))
+                print(f"[checkpoint] best saved: {best_path}")
+            except Exception as e:
+                print(f"[checkpoint] failed to save best model: {e}", flush=True)
 
-        # Save latest
-        latest_path = self.output_dir / 'latest_model.pt'
-        torch.save(checkpoint, latest_path)
+        try:
+            latest_path = self.output_dir / 'latest_model.pt'
+            torch.save(checkpoint, str(latest_path))
+        except Exception as e:
+            print(f"[checkpoint] failed to save latest model: {e}", flush=True)
 
     def load_checkpoint(self, checkpoint_path: str):
         """Load checkpoint."""

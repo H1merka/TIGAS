@@ -237,17 +237,39 @@ class TIGASModel(nn.Module):
 
         # Extract features from all branches
         features = self._extract_features(x, update_prototypes)
+        
+        # Diagnostic: Check for NaN after feature extraction
+        for key, feat in features.items():
+            if torch.is_tensor(feat) and (torch.isnan(feat).any() or torch.isinf(feat).any()):
+                import warnings
+                warnings.warn(f"[MODEL] NaN/Inf detected in features['{key}'] after extraction")
 
         # Apply cross-modal attention
         attended_features = self._apply_cross_modal_attention(features)
+        
+        # Diagnostic: Check for NaN after attention
+        for key, feat in attended_features.items():
+            if torch.is_tensor(feat) and (torch.isnan(feat).any() or torch.isinf(feat).any()):
+                import warnings
+                warnings.warn(f"[MODEL] NaN/Inf detected in attended_features['{key}'] after attention")
 
         # Fuse features adaptively
         fused_features = self._fuse_features(attended_features)
+        
+        # Diagnostic: Check for NaN after fusion
+        if torch.isnan(fused_features).any() or torch.isinf(fused_features).any():
+            import warnings
+            warnings.warn(f"[MODEL] NaN/Inf detected in fused_features after fusion")
 
         # Generate outputs
         outputs = self._generate_outputs(
             fused_features, features, attended_features, return_features
         )
+        
+        # Diagnostic: Check for NaN in final outputs
+        if torch.isnan(outputs['score']).any() or torch.isinf(outputs['score']).any():
+            import warnings
+            warnings.warn(f"[MODEL] NaN/Inf detected in final score output")
 
         return outputs
 
@@ -345,9 +367,15 @@ class TIGASModel(nn.Module):
         """Сгенерировать выходы модели."""
         # Main output: TIGAS score [0, 1]
         tigas_score = self.regression_head(fused_features)
+        
+        # Clamp score to valid range [0, 1] to prevent NaN
+        tigas_score = torch.clamp(tigas_score, min=0.0, max=1.0)
 
         # Auxiliary output: binary classification (for training)
         class_logits = self.binary_classifier(fused_features)
+        
+        # Clamp logits to prevent extreme values
+        class_logits = torch.clamp(class_logits, min=-10.0, max=10.0)
 
         outputs = {
             'score': tigas_score,

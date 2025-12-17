@@ -47,11 +47,16 @@ class FrequencyBlock(nn.Module):
         """
         2D Discrete Cosine Transform.
         Converts spatial domain to frequency domain.
+        Disables AMP to preserve numerical stability for FFT operations.
         """
-        # Efficient DCT using FFT
-        X = torch.fft.fft2(x, dim=(-2, -1))
-        # Take real part and normalize
-        return X.real
+        # Disable AMP for FFT to avoid ComplexHalf numerical issues
+        with torch.amp.autocast('cuda', enabled=False):
+            # Ensure input is float32 for FFT stability
+            x_float32 = x.float()
+            # Efficient DCT using FFT
+            X = torch.fft.fft2(x_float32, dim=(-2, -1))
+            # Take real part and normalize
+            return X.real
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -225,17 +230,32 @@ class StatisticalPooling(nn.Module):
         # Skewness (3rd moment)
         if self.pool_type == 'all':
             mean = torch.mean(x_flat, dim=2, keepdim=True)
-            std = torch.std(x_flat, dim=2, keepdim=True) + 1e-8
-            skewness = torch.mean(((x_flat - mean) / std) ** 3, dim=2)
+            std = torch.std(x_flat, dim=2, keepdim=True) + 1e-6  # Increased epsilon from 1e-8
+            # Clamp std to prevent division by very small numbers
+            std = torch.clamp(std, min=1e-5)
+            normalized = (x_flat - mean) / std
+            # Clamp normalized values to prevent overflow in power
+            normalized = torch.clamp(normalized, min=-1e2, max=1e2)
+            skewness = torch.mean(normalized ** 3, dim=2)
+            # Clamp skewness result
+            skewness = torch.clamp(skewness, min=-1e3, max=1e3)
             stats.append(skewness)
 
         # Kurtosis (4th moment)
         if self.pool_type == 'all':
-            kurtosis = torch.mean(((x_flat - mean) / std) ** 4, dim=2)
+            kurtosis = torch.mean(normalized ** 4, dim=2)
+            # Clamp kurtosis result
+            kurtosis = torch.clamp(kurtosis, min=-1e3, max=1e3)
             stats.append(kurtosis)
 
         # Concatenate all statistics
         output = torch.cat(stats, dim=1)
+        
+        # Final safety check: replace any remaining NaN/Inf with 0
+        if torch.isnan(output).any() or torch.isinf(output).any():
+            import warnings
+            warnings.warn("[STATISTICAL POOLING] NaN/Inf detected in output, replacing with zeros")
+            output = torch.where(torch.isfinite(output), output, torch.zeros_like(output))
 
         return output
 

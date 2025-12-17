@@ -18,6 +18,6 @@ REGRESSION_HIDDEN_DIM_RATIO = 2
 REGRESSION_FINAL_DIM_RATIO = 4
 
 # Weight initialization
-LINEAR_WEIGHT_STD = 0.01
+LINEAR_WEIGHT_STD = 0.02  # Increased from 0.01 for better numerical stability
 
 
