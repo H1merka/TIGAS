@@ -18,7 +18,7 @@ except ImportError:
 # Configuration
 DEFAULT_CACHE_DIR = Path.home() / '.cache' / 'tigas' / 'models'
 DEFAULT_MODEL_REPO = "H1merka/TIGAS"
-DEFAULT_MODEL_FILE = "tigas-base.pt"
+DEFAULT_MODEL_FILE = "best_model.pt"
 
 
 def get_cache_dir() -> Path:
