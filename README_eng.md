@@ -64,6 +64,7 @@ pip install -r requirements_cuda.txt
 
 ```python
 from tigas import TIGAS, compute_tigas_score
+import torch
 
 # Method 1: High-level function
 score = compute_tigas_score('image.jpg', checkpoint_path='model.pt')
@@ -75,9 +76,14 @@ score = tigas('image.jpg')  # Single image
 scores = tigas(torch.randn(4, 3, 256, 256))  # Batch
 scores = tigas.compute_directory('path/to/images/')  # Directory
 
-# Method 3: As a loss function
-score = tigas(generated_images)
-loss = 1.0 - score.mean()  # Maximize authenticity
+# Method 3: Auto-download model from HuggingFace Hub
+tigas = TIGAS(auto_download=True)  # Automatically downloads model from Hub
+score = tigas('image.jpg')
+
+# Method 4: As a loss function
+generated_images = torch.randn(4, 3, 256, 256, requires_grad=True)
+scores = tigas(generated_images)
+loss = 1.0 - scores.mean()  # Maximize authenticity
 loss.backward()
 ```
 
@@ -90,7 +96,10 @@ python scripts/evaluate.py --image path/to/image.jpg --checkpoint model.pt
 # Evaluate directory
 python scripts/evaluate.py --image_dir path/to/images/ --checkpoint model.pt --batch_size 32
 
-# With statistics and visualization
+# With auto-download from HuggingFace Hub
+python scripts/evaluate.py --image_dir images/ --auto_download
+
+# With results saving and visualization
 python scripts/evaluate.py --image_dir images/ --output results.json --plot
 ```
 
@@ -125,6 +134,20 @@ dataset/
 
 CSV format: `image_path,label` (1 — real, 0 — fake)
 
+### Dataset Validation (Required Step)
+
+**IMPORTANT**: Before training, you must validate dataset integrity:
+
+```bash
+python scripts/validate_dataset.py \
+  --dataset_dir /path/to/data \
+  --csv_file train.csv \
+  --remove_corrupted \
+  --update_csv
+```
+
+This will remove corrupted images and update CSV, preventing errors during training.
+
 ### Running Training
 
 ```bash
@@ -133,10 +156,10 @@ python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
   --batch_size 16 \
-  --lr 0.0001 \
+  --lr 0.0000125 \
   --output_dir ./checkpoints
 
-# Training with CSV
+# Training with CSV (recommended)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --use_csv \
@@ -155,7 +178,8 @@ python scripts/train_script.py \
 | `--data_root` | Path to data | Required |
 | `--epochs` | Number of epochs | 50 |
 | `--batch_size` | Batch size | 16 |
-| `--lr` | Learning rate | 0.0001 |
+| `--lr` | Learning rate | 0.0000125 |
+| `--use_csv` | Use CSV annotations | False |
 | `--img_size` | Image size | 256 |
 | `--output_dir` | Checkpoint directory | ./checkpoints |
 | `--device` | Device (cuda/cpu) | cuda |
@@ -245,10 +269,17 @@ tigas = TIGAS(checkpoint_path='model.pt')
 score = tigas('test_image.jpg')
 print(f"Authenticity score: {score:.4f}")
 ```
+import torch
 
-### 2. Batch Processing
+tigas = TIGAS(checkpoint_path='model.pt')
+image = torch.randn(1, 3, 256, 256)
+outputs = tigas(image, return_features=True)
 
-```python
+score = outputs['score']
+features = outputs['features']
+print(f"Score: {score.item():.4f}")
+print(f"Available features: {list(features.keys())}")
+print(f"Fused features shape: {features['fused']
 from tigas import TIGAS
 import torch
 
@@ -258,13 +289,22 @@ scores = tigas(images)
 print(f"Mean score: {scores.mean():.4f}")
 ```
 
-### 3. Feature Extraction
+### 3. Directory Processing
 
 ```python
 from tigas import TIGAS
 
-tigas = TIGAS(checkpoint_path='model.pt', return_features=True)
-score, features = tigas('image.jpg')
+tigas = TIGAS(checkpoint_path='model.pt')
+
+# Get scores for all images
+results = tigas.compute_directory(
+    'path/to/images/',
+    return_paths=True,
+    batch_size=32
+)
+
+for img_path, score in results.items():
+    print(f"{img_path}: {score:.4f}")
 print(f"Feature dimension: {features.shape}")
 ```
 

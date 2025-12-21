@@ -69,8 +69,8 @@ def parse_args():
     parser.add_argument(
         "--num_workers",
         type=int,
-        default=4,
-        help="Количество воркеров для загрузки данных (по умолчанию: 4)"
+        default=0,  # Windows: 0 быстрее из-за spawn overhead
+        help="Количество воркеров для загрузки данных (по умолчанию: 0 для Windows)"
     )
     
     # Опциональные аргументы - выход
@@ -124,6 +124,39 @@ def parse_args():
         "--grad_checkpointing",
         action="store_true",
         help="Использовать gradient checkpointing для сохранения памяти (медленнее)"
+    )
+    
+    # Опциональные аргументы - режим модели
+    parser.add_argument(
+        "--fast_mode",
+        action="store_true",
+        default=True,
+        help="Использовать быструю архитектуру модели (по умолчанию: True)"
+    )
+    parser.add_argument(
+        "--full_mode",
+        action="store_true",
+        help="Использовать полную архитектуру модели (медленнее, но точнее)"
+    )
+
+    # Опциональные аргументы - Loss weights (критично важно!)
+    parser.add_argument(
+        "--regression_weight",
+        type=float,
+        default=1.0,
+        help="Вес regression loss (по умолчанию: 1.0, основной loss)"
+    )
+    parser.add_argument(
+        "--classification_weight",
+        type=float,
+        default=0.3,
+        help="Вес classification loss (по умолчанию: 0.3, уменьшено с 0.5)"
+    )
+    parser.add_argument(
+        "--ranking_weight",
+        type=float,
+        default=0.2,
+        help="Вес ranking loss (по умолчанию: 0.2, уменьшено с 0.3)"
     )
 
     return parser.parse_args()
@@ -256,13 +289,16 @@ def main():
     
     # Создание модели
     print(f"\n[СОЗДАНИЕ МОДЕЛИ]...")
+    fast_mode = not args.full_mode  # fast_mode по умолчанию, если не указан --full_mode
     model = create_tigas_model(
         img_size=args.img_size,
         base_channels=32,
         feature_dim=256,
         num_attention_heads=8,
-        dropout=0.1
+        dropout=0.1,
+        fast_mode=fast_mode
     )
+    print(f"   [РЕЖИМ] {'FAST (оптимизированный)' if fast_mode else 'FULL (все ветви)'}")
     
     # Переносим модель на устройство сразу
     model = model.to(device)
@@ -313,14 +349,19 @@ def main():
         print(f"   [ОШИБКА] Ошибка при создании даталоадеров: {e}")
         return
     
-    # Создание функции потерь
+    # Создание функции потерь с настраиваемыми весами
+    print(f"\n[КОНФИГУРАЦИЯ LOSS FUNCTION]...")
+    print(f"   Regression weight:     {args.regression_weight}")
+    print(f"   Classification weight: {args.classification_weight}")
+    print(f"   Ranking weight:        {args.ranking_weight}")
+    
     loss_fn = CombinedLoss(
         use_tigas_loss=True,
         use_contrastive=False,
         tigas_loss_config={
-            'regression_weight': 1.0,
-            'classification_weight': 0.5,
-            'ranking_weight': 0.3,
+            'regression_weight': args.regression_weight,
+            'classification_weight': args.classification_weight,
+            'ranking_weight': args.ranking_weight,
             'use_smooth_l1': True,
             'margin': 0.5
         }
@@ -352,7 +393,7 @@ def main():
         use_amp=args.use_amp and (device == 'cuda'),  # AMP только на GPU и если включено
         gradient_accumulation_steps=1,
         max_grad_norm=1.0,
-        log_interval=10,
+        log_interval=50,  # Реже логировать для скорости
         save_interval=5,
         validate_interval=1,
         early_stopping_patience=15,
@@ -364,7 +405,7 @@ def main():
     
     # Pre-training dataset check (optional but recommended)
     print(f"\n[РЕКОМЕНДАЦИЯ] Перед началом обучения рекомендуется проверить датасет:")
-    print(f"   python scripts/check_dataset.py --data_root {args.data_root} --check_batches")
+    print(f"   python scripts/validate_dataset.py --dataset_dir {args.data_root}")
     print(f"   Это займёт ~5-10 минут и помогает избежать NaN ошибок позже")
     
     # Финальная проверка устройства
@@ -378,15 +419,15 @@ def main():
         print(f"\n   [CPU] Обучение будет выполняться на процессоре (CPU)")
         print(f"   [CPU] Это будет медленнее, чем на GPU")
     
-    # Загрузка чекпоинта, если указан (делегируем trainer'у)
+    # Resume info (загрузка произойдёт внутри trainer.train())
     if args.resume:
-        print(f"\n[ЗАГРУЗКА ЧЕКПОИНТА] {args.resume}")
-        try:
-            trainer.load_checkpoint(args.resume)
-            print(f"   [OK] Чекпоинт загружен")
-        except Exception as e:
-            print(f"   [ОШИБКА] Ошибка при загрузке чекпоинта: {e}")
-            print(f"   [ВНИМАНИЕ] Начинаем обучение с нуля")
+        resume_path = Path(args.resume)
+        if resume_path.exists():
+            print(f"\n[RESUME] Будет загружен чекпоинт: {args.resume}")
+        else:
+            print(f"\n[WARNING] Чекпоинт не найден: {args.resume}")
+            print(f"   Начинаем обучение с нуля")
+            args.resume = None  # Сбросить чтобы не передавать в train()
     
     # Обучение
     print(f"\n[НАЧАЛО ОБУЧЕНИЯ]...")

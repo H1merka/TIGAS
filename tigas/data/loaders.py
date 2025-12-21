@@ -63,7 +63,9 @@ def create_dataloaders(
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        drop_last=True
+        drop_last=True,
+        persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
+        prefetch_factor=4 if num_workers > 0 else None  # Prefetch 4 batches per worker
     )
 
     val_loader = DataLoader(
@@ -71,7 +73,9 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=4 if num_workers > 0 else None
     )
 
     test_loader = DataLoader(
@@ -79,7 +83,9 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=4 if num_workers > 0 else None
     )
 
     print(f"Created dataloaders:")
@@ -228,10 +234,10 @@ def create_dataloaders_from_csv(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=pin_memory,
+        pin_memory=pin_memory if num_workers > 0 else False,
         drop_last=True,
-        prefetch_factor=2,  # ← уменьши очередь (было 8)
-        persistent_workers=True  # ← переиспользуй workers
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=True if num_workers > 0 else False
     )
 
     val_loader = DataLoader(
@@ -239,7 +245,9 @@ def create_dataloaders_from_csv(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory if num_workers > 0 else False,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=2 if num_workers > 0 else None
     )
 
     test_loader = DataLoader(
@@ -247,7 +255,9 @@ def create_dataloaders_from_csv(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=pin_memory
+        pin_memory=pin_memory if num_workers > 0 else False,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=2 if num_workers > 0 else None
     )
 
     # Print summary

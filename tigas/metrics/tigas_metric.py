@@ -1,6 +1,6 @@
 """
 TIGAS Metric - Main metric computation class.
-Provides both model-based and model-free metric computation.
+Provides model-based metric computation using trained neural network.
 """
 
 import torch
@@ -10,21 +10,14 @@ from typing import Optional, Dict, Union, List
 import warnings
 
 from ..models.tigas_model import TIGASModel
-from .components import (
-    PerceptualDistance,
-    SpectralDivergence,
-    StatisticalConsistency
-)
 
 
 class TIGASMetric(nn.Module):
     """
     TIGAS Metric Calculator.
 
-    Can operate in two modes:
-    1. Model-based: Uses trained TIGASModel for prediction
-    2. Component-based: Combines individual metric components
-
+    Uses trained TIGASModel for prediction.
+    
     The metric is fully differentiable and can be used as:
     - Image quality assessment
     - Loss function for training generative models
@@ -34,47 +27,28 @@ class TIGASMetric(nn.Module):
     def __init__(
         self,
         model: Optional[TIGASModel] = None,
-        use_model: bool = True,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-        component_weights: Optional[Dict[str, float]] = None
+        device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     ):
         """
         Args:
-            model: Pretrained TIGASModel (if use_model=True)
-            use_model: Whether to use model-based computation
+            model: Pretrained TIGASModel (required for inference)
             device: Device to run on
-            component_weights: Weights for component metrics (if use_model=False)
         """
         super().__init__()
 
-        self.use_model = use_model
         self.device = device
 
-        if use_model:
-            if model is None:
-                warnings.warn(
-                    "No model provided for model-based TIGAS. "
-                    "Creating default model (untrained)."
-                )
-                model = TIGASModel()
+        if model is None:
+            warnings.warn(
+                "No model provided for TIGAS. "
+                "Creating default model (untrained)."
+            )
+            model = TIGASModel()
 
-            self.model = model.to(device)
-            self.model.eval()
-        else:
-            # Component-based mode
-            self.spectral_div = SpectralDivergence()
-            self.stat_consistency = StatisticalConsistency()
+        self.model = model.to(device)
+        self.model.eval()
 
-            # Default weights for components
-            if component_weights is None:
-                component_weights = {
-                    'spectral': 0.4,
-                    'statistical': 0.4,
-                    'spatial': 0.2
-                }
-            self.component_weights = component_weights
-
-    def compute_model_based(
+    def compute(
         self,
         images: torch.Tensor,
         return_features: bool = False
@@ -101,105 +75,33 @@ class TIGASMetric(nn.Module):
             'features': outputs.get('features', None)
         }
 
-    def compute_component_based(
-        self,
-        images: torch.Tensor,
-        reference_images: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Compute TIGAS using individual components.
-
-        Args:
-            images: Input images [B, C, H, W]
-            reference_images: Optional reference real images [B, C, H, W]
-
-        Returns:
-            Dictionary with scores and component values
-        """
-        B = images.size(0)
-
-        # Spectral divergence
-        spectral_div, spectral_info = self.spectral_div(images, reference_images)
-        spectral_score = torch.exp(-spectral_div)  # Convert divergence to similarity
-
-        # Statistical consistency
-        stat_consistency, stat_moments = self.stat_consistency(images)
-        stat_score = torch.exp(-stat_consistency)  # Convert to similarity
-
-        # Spatial variance (simple measure of detail)
-        # Real images typically have more spatial variance than generated
-        laplacian_kernel = torch.tensor(
-            [[0, 1, 0], [1, -4, 1], [0, 1, 0]],
-            dtype=images.dtype,
-            device=images.device
-        ).view(1, 1, 3, 3)
-
-        spatial_var = []
-        for c in range(images.size(1)):
-            channel = images[:, c:c+1, :, :]
-            laplacian = F.conv2d(channel, laplacian_kernel, padding=1)
-            var = laplacian.var(dim=[2, 3])
-            spatial_var.append(var)
-
-        spatial_var = torch.stack(spatial_var, dim=1).mean(dim=1)  # [B]
-
-        # Normalize spatial variance to [0, 1] range
-        # Higher variance = more realistic
-        spatial_score = torch.sigmoid(spatial_var * 10 - 5)
-
-        # Weighted combination
-        final_score = (
-            self.component_weights['spectral'] * spectral_score +
-            self.component_weights['statistical'] * stat_score +
-            self.component_weights['spatial'] * spatial_score
-        )
-
-        return {
-            'score': final_score.unsqueeze(1),  # [B, 1]
-            'spectral_score': spectral_score,
-            'statistical_score': stat_score,
-            'spatial_score': spatial_score,
-            'spectral_info': spectral_info,
-            'statistical_moments': stat_moments
-        }
-
     def forward(
         self,
         images: torch.Tensor,
-        reference_images: Optional[torch.Tensor] = None,
-        return_components: bool = False
+        return_features: bool = False
     ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Compute TIGAS score.
 
         Args:
             images: Input images [B, C, H, W], range [-1, 1] or [0, 1]
-            reference_images: Optional reference images (for component-based)
-            return_components: Whether to return component scores
+            return_features: Whether to return intermediate features
 
         Returns:
-            score: TIGAS score [B, 1] if return_components=False
-            dict: Dictionary with scores and components if return_components=True
+            score: TIGAS score [B, 1] if return_features=False
+            dict: Dictionary with scores and features if return_features=True
         """
         # Ensure images are on correct device
         images = images.to(self.device)
-        if reference_images is not None:
-            reference_images = reference_images.to(self.device)
 
         # Normalize to [-1, 1] if needed
         if images.min() >= 0 and images.max() <= 1:
             images = images * 2 - 1
-        if reference_images is not None:
-            if reference_images.min() >= 0 and reference_images.max() <= 1:
-                reference_images = reference_images * 2 - 1
 
-        # Compute based on mode
-        if self.use_model:
-            results = self.compute_model_based(images, return_features=return_components)
-        else:
-            results = self.compute_component_based(images, reference_images)
+        # Compute using trained model
+        results = self.compute(images, return_features=return_features)
 
-        if return_components:
+        if return_features:
             return results
         else:
             return results['score']

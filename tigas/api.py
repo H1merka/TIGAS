@@ -24,13 +24,14 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from PIL import Image
-from typing import Union, List, Dict, Optional
+from typing import Union, List, Dict, Optional, Any
 import numpy as np
 
 from .models.tigas_model import TIGASModel, create_tigas_model
 from .metrics.tigas_metric import TIGASMetric
 from .data.transforms import get_inference_transforms
 from .utils.input_processor import InputProcessor
+from .model_hub import get_default_model_path
 
 
 class TIGAS(nn.Module):
@@ -51,16 +52,18 @@ class TIGAS(nn.Module):
         checkpoint_path: Optional[str] = None,
         img_size: int = 256,
         device: Optional[str] = None,
-        use_model: bool = True
+        auto_download: bool = True
     ):
         """
         Initialize TIGAS.
 
         Args:
-            checkpoint_path: Path to pretrained checkpoint (optional)
+            checkpoint_path: Path to pretrained checkpoint (optional).
+                           If None, will automatically download default model from HuggingFace Hub.
             img_size: Input image size
             device: Device ('cuda' or 'cpu'). Auto-detected if None.
-            use_model: Whether to use model-based computation
+            auto_download: Automatically download model from HuggingFace Hub if not found locally.
+                         Set to False to prevent automatic downloads.
         """
         super().__init__()
 
@@ -69,31 +72,37 @@ class TIGAS(nn.Module):
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.device = device
 
+        # Resolve checkpoint path
+        if checkpoint_path is None:
+            # Try to get default model (auto-download if needed)
+            checkpoint_path = get_default_model_path(
+                auto_download=auto_download,
+                show_progress=True
+            )
+            
+            if checkpoint_path is None:
+                print("Warning: No pretrained model available. Using untrained model.")
+                print("         For better results, download a pretrained model or train one.")
+        
         # Create or load model
-        if use_model:
-            if checkpoint_path and Path(checkpoint_path).exists():
-                self.model = create_tigas_model(
-                    img_size=img_size,
-                    pretrained=True,
-                    checkpoint_path=checkpoint_path
-                )
-                print(f"Loaded TIGAS model from {checkpoint_path}")
-            else:
-                self.model = create_tigas_model(img_size=img_size)
-                if checkpoint_path:
-                    print(f"Warning: Checkpoint not found at {checkpoint_path}. Using untrained model.")
-                else:
-                    print("Using untrained TIGAS model.")
-
-            self.model = self.model.to(device)
-            self.model.eval()
+        if checkpoint_path and Path(checkpoint_path).exists():
+            self.model = create_tigas_model(
+                img_size=img_size,
+                pretrained=True,
+                checkpoint_path=checkpoint_path
+            )
+            print(f"Loaded TIGAS model from {checkpoint_path}")
         else:
-            self.model = None
+            self.model = create_tigas_model(img_size=img_size)
+            if checkpoint_path:
+                print(f"Warning: Checkpoint not found at {checkpoint_path}. Using untrained model.")
+
+        self.model = self.model.to(device)
+        self.model.eval()
 
         # Create metric wrapper
         self.metric = TIGASMetric(
             model=self.model,
-            use_model=use_model,
             device=device
         )
 
@@ -136,7 +145,7 @@ class TIGAS(nn.Module):
         # Compute TIGAS
         with torch.no_grad():
             if return_features:
-                return self.metric(x, return_components=True)
+                return self.metric(x, return_features=True)
             else:
                 return self.metric(x)
 
@@ -218,7 +227,7 @@ class TIGAS(nn.Module):
             batch_size: Batch size
 
         Returns:
-            scores: TIGAS scores [N, 1]
+            torch.Tensor: TIGAS scores [N, 1]
         """
         N = images.size(0)
         all_scores = []
@@ -230,7 +239,7 @@ class TIGAS(nn.Module):
 
         return torch.cat(all_scores, dim=0)
 
-    def get_model_info(self) -> Dict[str, any]:
+    def get_model_info(self) -> Dict[str, Any]:
         """Get information about the model."""
         if self.model is None:
             return {"mode": "component-based", "model": None}
@@ -245,9 +254,6 @@ class TIGAS(nn.Module):
         """Save model checkpoint."""
         if self.model is None:
             raise ValueError("No model to save (component-based mode)")
-
-        save_path = Path(save_path)
-        save_path.parent.mkdir(parents=True, exist_ok=True)
 
         checkpoint = {
             'model_state_dict': self.model.state_dict(),

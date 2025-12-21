@@ -373,6 +373,11 @@ class TIGASTrainer:
         print(f"Gradient accumulation: {self.gradient_accumulation_steps}")
 
         start_epoch = self.current_epoch
+        # При resume начинаем со следующей эпохи (текущая уже завершена)
+        if resume_from:
+            start_epoch += 1
+            print(f"Resuming from epoch {self.current_epoch}, starting at epoch {start_epoch}")
+        
         for epoch in range(start_epoch, num_epochs):
             self.current_epoch = epoch
 
@@ -382,6 +387,10 @@ class TIGASTrainer:
 
             # Log training
             print(f"\nEpoch {epoch} - Train Loss: {train_losses['total']:.4f}")
+            
+            # Update current_epoch только после завершения эпохи
+            # (для корректного resume если прервётся во время validation/save)
+            self.current_epoch = epoch
             if self.use_tensorboard:
                 for key, value in train_losses.items():
                     self.writer.add_scalar(f'train/{key}', value, epoch)

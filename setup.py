@@ -43,7 +43,11 @@ setup(
         "Programming Language :: Python :: 3.11",
     ],
     python_requires=">=3.8",
-    install_requires=requirements,
+    install_requires=requirements + [
+        "torch>=2.2.0",  # PyTorch core dependency
+        "torchvision>=0.17.0",  # For image transforms
+        "huggingface-hub>=0.19.0",  # For automatic model download
+    ],
     extras_require={
         "dev": [
             "pytest>=7.0.0",
@@ -65,7 +69,7 @@ setup(
     entry_points={
         "console_scripts": [
             "tigas=scripts.evaluate:main",
-            "tigas-train=scripts.train:main",
+            "tigas-train=scripts.train_script:main",
         ],
     },
     include_package_data=True,

@@ -40,19 +40,8 @@ from .constants import (
 class TIGASModel(nn.Module):
     """
     Trained Image Generation Authenticity Score Model.
-
-    Architecture:
-    1. Multi-scale CNN backbone for perceptual features
-    2. Spectral analyzer for frequency domain analysis
-    3. Statistical moment estimator for distribution consistency
-    4. Cross-modal attention for feature fusion
-    5. Regression head for final score [0, 1]
-
-    Key innovations:
-    - Combines complementary analysis approaches
-    - Fully differentiable (can be used as loss function)
-    - Attention-based fusion of multi-modal features
-    - Learnable statistics of natural images
+    
+    OPTIMIZED for fast training with optional lightweight mode.
     """
 
     def __init__(
@@ -63,91 +52,101 @@ class TIGASModel(nn.Module):
         feature_dim: int = DEFAULT_FEATURE_DIM,
         num_attention_heads: int = DEFAULT_ATTENTION_HEADS,
         dropout: float = 0.1,
-        pretrained_backbone: bool = False
+        pretrained_backbone: bool = False,
+        fast_mode: bool = True  # NEW: Enable fast training mode
     ):
         super().__init__()
 
         self.img_size = img_size
         self.in_channels = in_channels
         self.feature_dim = feature_dim
+        self.fast_mode = fast_mode
 
         # ==================== Feature Extraction Branches ====================
 
-        # Branch 1: Multi-scale perceptual features
+        # Branch 1: Multi-scale perceptual features (ALWAYS used)
         self.perceptual_extractor = MultiScaleFeatureExtractor(
             in_channels=in_channels,
             base_channels=base_channels,
             stages=DEFAULT_STAGES
         )
 
-        # Branch 2: Spectral analyzer
-        self.spectral_analyzer = SpectralAnalyzer(
-            in_channels=in_channels,
-            hidden_dim=feature_dim
-        )
-
-        # Branch 3: Statistical moment estimator
-        self.statistical_estimator = StatisticalMomentEstimator(
-            in_channels=in_channels,
-            feature_dim=feature_dim
-        )
-
-        # ==================== Feature Aggregation ====================
-
         # Aggregate multi-scale perceptual features
         perceptual_channels = sum(self.perceptual_extractor.out_channels)
         self.perceptual_aggregator = nn.Sequential(
-            # Вход уже плоский [B, perceptual_channels] после concat
             nn.Linear(perceptual_channels, feature_dim),
             nn.LayerNorm(feature_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout)
         )
 
-        # ==================== Cross-Modal Attention ====================
+        if not fast_mode:
+            # Full mode: all branches + attention
+            # Branch 2: Spectral analyzer
+            self.spectral_analyzer = SpectralAnalyzer(
+                in_channels=in_channels,
+                hidden_dim=feature_dim
+            )
 
-        # Spectral attending to perceptual
-        self.spectral_to_perceptual_attn = CrossModalAttention(
-            query_dim=feature_dim,
-            key_value_dim=feature_dim,
-            num_heads=num_attention_heads,
-            dropout=dropout
-        )
+            # Branch 3: Statistical moment estimator
+            self.statistical_estimator = StatisticalMomentEstimator(
+                in_channels=in_channels,
+                feature_dim=feature_dim
+            )
 
-        # Statistical attending to perceptual
-        self.stat_to_perceptual_attn = CrossModalAttention(
-            query_dim=feature_dim,
-            key_value_dim=feature_dim,
-            num_heads=num_attention_heads,
-            dropout=dropout
-        )
+            # Cross-Modal Attention
+            self.spectral_to_perceptual_attn = CrossModalAttention(
+                query_dim=feature_dim,
+                key_value_dim=feature_dim,
+                num_heads=num_attention_heads,
+                dropout=dropout
+            )
 
-        # Self-attention on fused features
-        self.self_attention = SelfAttention(
-            dim=feature_dim,
-            num_heads=num_attention_heads,
-            dropout=dropout
-        )
+            self.stat_to_perceptual_attn = CrossModalAttention(
+                query_dim=feature_dim,
+                key_value_dim=feature_dim,
+                num_heads=num_attention_heads,
+                dropout=dropout
+            )
 
-        # ==================== Adaptive Fusion ====================
+            self.self_attention = SelfAttention(
+                dim=feature_dim,
+                num_heads=num_attention_heads,
+                dropout=dropout
+            )
 
-        self.feature_fusion = AdaptiveFeatureFusion(
-            num_streams=3,  # perceptual, spectral, statistical
-            feature_dim=feature_dim
-        )
+            self.feature_fusion = AdaptiveFeatureFusion(
+                num_streams=3,
+                feature_dim=feature_dim
+            )
+        else:
+            # Fast mode: single branch with simple fusion
+            # Lightweight auxiliary branch (much smaller)
+            self.aux_branch = nn.Sequential(
+                nn.Conv2d(in_channels, 32, 3, stride=2, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(32, 64, 3, stride=2, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d(1),
+                nn.Flatten(),
+                nn.Linear(64, feature_dim // 2)
+            )
+            
+            # Simple concat fusion
+            self.fast_fusion = nn.Sequential(
+                nn.Linear(feature_dim + feature_dim // 2, feature_dim),
+                nn.LayerNorm(feature_dim),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout)
+            )
 
         # ==================== Regression Head ====================
-
-        self.regression_head = self._build_regression_head(
-            feature_dim, dropout
-        )
+        self.regression_head = self._build_regression_head(feature_dim, dropout)
 
         # ==================== Auxiliary Heads (for training) ====================
-
-        # Binary classification head (real vs fake)
-        self.binary_classifier = self._build_classifier_head(
-            feature_dim, dropout
-        )
+        self.binary_classifier = self._build_classifier_head(feature_dim, dropout)
 
         # Initialize weights
         self._initialize_weights()
@@ -219,57 +218,81 @@ class TIGASModel(nn.Module):
         update_prototypes: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass.
-
-        Args:
-            x: Input image [B, C, H, W], normalized to [0, 1] or [-1, 1]
-            return_features: Whether to return intermediate features
-            update_prototypes: Whether to update statistical prototypes (training only)
-
-        Returns:
-            Dictionary containing:
-                - 'score': TIGAS authenticity score [B, 1], range [0, 1]
-                - 'logits': Binary classification logits [B, 2] (optional, for training)
-                - 'features': Intermediate features (if return_features=True)
+        Forward pass with fast_mode optimization.
         """
         # Normalize input
         x = self._normalize_input(x)
 
+        if self.fast_mode:
+            # FAST PATH: Single perceptual branch + lightweight aux
+            return self._forward_fast(x, return_features)
+        else:
+            # FULL PATH: All branches + cross-modal attention
+            return self._forward_full(x, return_features, update_prototypes)
+
+    def _forward_fast(
+        self,
+        x: torch.Tensor,
+        return_features: bool = False
+    ) -> Dict[str, torch.Tensor]:
+        """Fast forward pass - perceptual only + lightweight aux."""
+        # Extract perceptual features
+        perceptual_features = self.perceptual_extractor(x)
+        
+        # Aggregate multi-scale features
+        perceptual_concat = torch.cat([
+            F.adaptive_avg_pool2d(feat, 1).flatten(1)
+            for feat in perceptual_features
+        ], dim=1)
+        perceptual_feat = self.perceptual_aggregator(perceptual_concat)
+        
+        # Lightweight auxiliary features
+        aux_feat = self.aux_branch(x)
+        
+        # Simple fusion
+        fused = self.fast_fusion(torch.cat([perceptual_feat, aux_feat], dim=1))
+        
+        # Generate outputs
+        tigas_score = self.regression_head(fused)
+        tigas_score = torch.clamp(tigas_score, min=0.0, max=1.0)
+        
+        class_logits = self.binary_classifier(fused)
+        class_logits = torch.clamp(class_logits, min=-10.0, max=10.0)
+
+        outputs = {
+            'score': tigas_score,
+            'logits': class_logits
+        }
+
+        if return_features:
+            outputs['features'] = {
+                'perceptual': perceptual_feat,
+                'fused': fused,
+                'multi_scale': perceptual_features
+            }
+
+        return outputs
+
+    def _forward_full(
+        self,
+        x: torch.Tensor,
+        return_features: bool = False,
+        update_prototypes: bool = False
+    ) -> Dict[str, torch.Tensor]:
+        """Full forward pass with all branches and attention."""
         # Extract features from all branches
         features = self._extract_features(x, update_prototypes)
-        
-        # Diagnostic: Check for NaN after feature extraction
-        for key, feat in features.items():
-            if torch.is_tensor(feat) and (torch.isnan(feat).any() or torch.isinf(feat).any()):
-                import warnings
-                warnings.warn(f"[MODEL] NaN/Inf detected in features['{key}'] after extraction")
 
         # Apply cross-modal attention
         attended_features = self._apply_cross_modal_attention(features)
-        
-        # Diagnostic: Check for NaN after attention
-        for key, feat in attended_features.items():
-            if torch.is_tensor(feat) and (torch.isnan(feat).any() or torch.isinf(feat).any()):
-                import warnings
-                warnings.warn(f"[MODEL] NaN/Inf detected in attended_features['{key}'] after attention")
 
         # Fuse features adaptively
         fused_features = self._fuse_features(attended_features)
-        
-        # Diagnostic: Check for NaN after fusion
-        if torch.isnan(fused_features).any() or torch.isinf(fused_features).any():
-            import warnings
-            warnings.warn(f"[MODEL] NaN/Inf detected in fused_features after fusion")
 
         # Generate outputs
         outputs = self._generate_outputs(
             fused_features, features, attended_features, return_features
         )
-        
-        # Diagnostic: Check for NaN in final outputs
-        if torch.isnan(outputs['score']).any() or torch.isinf(outputs['score']).any():
-            import warnings
-            warnings.warn(f"[MODEL] NaN/Inf detected in final score output")
 
         return outputs
 
@@ -427,6 +450,7 @@ def create_tigas_model(
     img_size: int = 256,
     pretrained: bool = False,
     checkpoint_path: Optional[str] = None,
+    fast_mode: bool = True,  # Default to fast mode for training
     **kwargs
 ) -> TIGASModel:
     """
@@ -436,16 +460,21 @@ def create_tigas_model(
         img_size: Input image size
         pretrained: Whether to load pretrained weights
         checkpoint_path: Path to checkpoint file
+        fast_mode: Use fast training mode (default: True)
         **kwargs: Additional arguments for TIGASModel
 
     Returns:
         model: TIGASModel instance
     """
-    model = TIGASModel(img_size=img_size, **kwargs)
+    model = TIGASModel(img_size=img_size, fast_mode=fast_mode, **kwargs)
 
     if pretrained and checkpoint_path is not None:
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # Handle both fast_mode and full model checkpoints
+        try:
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        except Exception as e:
+            print(f"Warning: Partial weight loading due to architecture change: {e}")
         print(f"Loaded pretrained weights from {checkpoint_path}")
 
     return model
