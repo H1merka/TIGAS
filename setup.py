@@ -66,16 +66,6 @@ setup(
             "wandb>=0.12.0",
         ]
     },
-    entry_points={
-        "console_scripts": [
-            "tigas=scripts.evaluate:main",
-            "tigas-train=scripts.train_script:main",
-        ],
-    },
-    include_package_data=True,
-    package_data={
-        "tigas": ["configs/*.yaml"],
-    },
     zip_safe=False,
     keywords=[
         "deep learning",
