@@ -88,6 +88,16 @@ def parse_args():
         default=None,
         help="Путь к чекпоинту для продолжения обучения"
     )
+    parser.add_argument(
+        "--reset_lr",
+        action="store_true",
+        help="При resume: не восстанавливать LR из чекпоинта, использовать --lr"
+    )
+    parser.add_argument(
+        "--reset_scheduler",
+        action="store_true",
+        help="При resume: не восстанавливать состояние scheduler, начать warmup заново"
+    )
     
     # Опциональные аргументы - устройство
     parser.add_argument(
@@ -424,6 +434,11 @@ def main():
         resume_path = Path(args.resume)
         if resume_path.exists():
             print(f"\n[RESUME] Будет загружен чекпоинт: {args.resume}")
+            print(f"   |- --epochs {args.epochs} означает: ещё {args.epochs} эпох")
+            if args.reset_lr:
+                print(f"   |- --reset_lr: LR будет установлен в {args.lr}")
+            if args.reset_scheduler:
+                print(f"   `- --reset_scheduler: Scheduler начнёт с нуля (новый warmup)")
         else:
             print(f"\n[WARNING] Чекпоинт не найден: {args.resume}")
             print(f"   Начинаем обучение с нуля")
@@ -434,7 +449,16 @@ def main():
     print("="*60 + "\n")
     
     try:
-        trainer.train(num_epochs=args.epochs, resume_from=args.resume)
+        # new_lr передаём только если resume + reset_lr
+        new_lr = args.lr if (args.resume and args.reset_lr) else None
+        
+        trainer.train(
+            num_epochs=args.epochs,
+            resume_from=args.resume,
+            reset_lr=args.reset_lr,
+            reset_scheduler=args.reset_scheduler,
+            new_lr=new_lr
+        )
         
         print("\n" + "="*60)
         print("[УСПЕХ] ОБУЧЕНИЕ ЗАВЕРШЕНО УСПЕШНО!")

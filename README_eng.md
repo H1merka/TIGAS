@@ -151,24 +151,50 @@ This will remove corrupted images and update CSV, preventing errors during train
 ### Running Training
 
 ```bash
-# Basic training
+# Fast training (Fast Mode - default, optimized for speed)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
   --batch_size 16 \
-  --lr 0.0000125 \
+  --img_size 128 \
+  --lr 0.0003 \
+  --use_amp \
   --output_dir ./checkpoints
 
-# Training with CSV (recommended)
+# Full training (Full Mode - all branches, higher accuracy)
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --epochs 50 \
+  --batch_size 8 \
+  --img_size 256 \
+  --lr 0.0001 \
+  --use_amp \
+  --full_mode \
+  --output_dir ./checkpoints
+
+# Training with CSV annotations (recommended)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --use_csv \
-  --epochs 100
+  --epochs 50 \
+  --use_amp
 
-# Resume training from checkpoint
+# Resume training from checkpoint (N more epochs)
 python scripts/train_script.py \
   --data_root data/ \
-  --resume checkpoints/model.pt
+  --resume checkpoints/best_model.pt \
+  --epochs 10 \
+  --lr 0.0001 \
+  --reset_lr
+
+# Resume with full LR and scheduler reset
+python scripts/train_script.py \
+  --data_root data/ \
+  --resume checkpoints/best_model.pt \
+  --epochs 10 \
+  --lr 0.0003 \
+  --reset_lr \
+  --reset_scheduler
 ```
 
 ### Training Parameters
@@ -176,13 +202,20 @@ python scripts/train_script.py \
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--data_root` | Path to data | Required |
-| `--epochs` | Number of epochs | 50 |
+| `--epochs` | Number of epochs (on resume — N more epochs) | 50 |
 | `--batch_size` | Batch size | 16 |
 | `--lr` | Learning rate | 0.0000125 |
 | `--use_csv` | Use CSV annotations | False |
 | `--img_size` | Image size | 256 |
 | `--output_dir` | Checkpoint directory | ./checkpoints |
-| `--device` | Device (cuda/cpu) | cuda |
+| `--device` | Device (cuda/cpu) | auto |
+| `--num_workers` | DataLoader workers (0 for Windows) | 0 |
+| `--use_amp` | Mixed Precision Training | False |
+| `--fast_mode` | Fast architecture (optimized) | True |
+| `--full_mode` | Full architecture (all branches) | False |
+| `--resume` | Path to checkpoint for resuming | None |
+| `--reset_lr` | Reset LR on resume | False |
+| `--reset_scheduler` | Reset scheduler on resume | False |
 
 ## Architecture
 

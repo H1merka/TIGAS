@@ -221,48 +221,57 @@ def example_5_directory_processing():
 
 
 def example_6_model_configurations():
-    """Example 6: Different model configurations."""
+    """Example 6: Different model configurations (Fast vs Full mode)."""
     print_section("Example 6: Model Configurations")
 
     print("Creating different TIGAS model configurations...\n")
 
-    # Small model
-    print("1. Small Model (for resource-constrained environments):")
-    small_model = create_tigas_model(
+    # Fast Mode (default, optimized for speed)
+    print("1. Fast Mode (default, optimized for speed):")
+    fast_model = create_tigas_model(
         img_size=128,
-        base_channels=16,
-        feature_dim=128
+        base_channels=32,
+        feature_dim=256,
+        fast_mode=True
     )
-    small_info = small_model.get_model_size()
+    fast_info = fast_model.get_model_size()
     print(f"   Input size: 128x128")
-    print(f"   Parameters: {small_info['total_parameters']:,}")
-    print(f"   Model size: {small_info['model_size_mb']:.2f} MB")
+    print(f"   Parameters: {fast_info['total_parameters']:,}")
+    print(f"   Model size: {fast_info['model_size_mb']:.2f} MB")
+    print(f"   Use case: Fast training, limited VRAM (4-8 GB)")
 
-    # Standard model (default)
-    print("\n2. Standard Model (default configuration):")
-    standard_model = create_tigas_model(
+    # Full Mode (all branches, higher accuracy)
+    print("\n2. Full Mode (all branches, higher accuracy):")
+    full_model = create_tigas_model(
         img_size=256,
         base_channels=32,
-        feature_dim=256
+        feature_dim=256,
+        fast_mode=False
     )
-    standard_info = standard_model.get_model_size()
+    full_info = full_model.get_model_size()
     print(f"   Input size: 256x256")
-    print(f"   Parameters: {standard_info['total_parameters']:,}")
-    print(f"   Model size: {standard_info['model_size_mb']:.2f} MB")
+    print(f"   Parameters: {full_info['total_parameters']:,}")
+    print(f"   Model size: {full_info['model_size_mb']:.2f} MB")
+    print(f"   Use case: Maximum accuracy, 16+ GB VRAM")
 
     # Large model
-    print("\n3. Large Model (for maximum accuracy):")
+    print("\n3. Large Full Mode (for maximum accuracy):")
     large_model = create_tigas_model(
         img_size=512,
         base_channels=64,
-        feature_dim=512
+        feature_dim=512,
+        fast_mode=False
     )
     large_info = large_model.get_model_size()
     print(f"   Input size: 512x512")
     print(f"   Parameters: {large_info['total_parameters']:,}")
     print(f"   Model size: {large_info['model_size_mb']:.2f} MB")
+    print(f"   Use case: Research, 24+ GB VRAM (A100/RTX 4090)")
 
-    print("\nNote: Larger models provide better accuracy but require more memory")
+    print("\n" + "-"*60)
+    print("Training commands:")
+    print("  Fast Mode:  python scripts/train_script.py --img_size 128 --batch_size 16")
+    print("  Full Mode:  python scripts/train_script.py --img_size 256 --batch_size 8 --full_mode")
 
 
 def example_7_convenience_function():

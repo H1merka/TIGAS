@@ -148,24 +148,50 @@ python scripts/validate_dataset.py \
 ### Запуск обучения
 
 ```bash
-# Базовое обучение
+# Быстрое обучение (Fast Mode - по умолчанию, оптимизировано для скорости)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
   --batch_size 16 \
-  --lr 0.0000125 \
+  --img_size 128 \
+  --lr 0.0003 \
+  --use_amp \
   --output_dir ./checkpoints
 
-# Обучение с CSV (рекомендуется)
+# Полное обучение (Full Mode - все ветви модели, выше точность)
+python scripts/train_script.py \
+  --data_root /path/to/data \
+  --epochs 50 \
+  --batch_size 8 \
+  --img_size 256 \
+  --lr 0.0001 \
+  --use_amp \
+  --full_mode \
+  --output_dir ./checkpoints
+
+# Обучение с CSV аннотациями (рекомендуется)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --use_csv \
-  --epochs 100
+  --epochs 50 \
+  --use_amp
 
-# Продолжение обучения с чекпоинта
+# Продолжение обучения с чекпоинта (ещё N эпох)
 python scripts/train_script.py \
   --data_root data/ \
-  --resume checkpoints/model.pt
+  --resume checkpoints/best_model.pt \
+  --epochs 10 \
+  --lr 0.0001 \
+  --reset_lr
+
+# Продолжение с полным сбросом LR и scheduler
+python scripts/train_script.py \
+  --data_root data/ \
+  --resume checkpoints/best_model.pt \
+  --epochs 10 \
+  --lr 0.0003 \
+  --reset_lr \
+  --reset_scheduler
 ```
 
 ### Параметры обучения
@@ -173,13 +199,20 @@ python scripts/train_script.py \
 | Параметр | Описание | По умолчанию |
 |----------|----------|--------------|
 | `--data_root` | Путь к данным | Обязательный |
-| `--epochs` | Количество эпох | 50 |
+| `--epochs` | Количество эпох (при resume — ещё N эпох) | 50 |
 | `--batch_size` | Размер батча | 16 |
 | `--lr` | Скорость обучения | 0.0000125 |
 | `--use_csv` | Использовать CSV аннотации | False |
 | `--img_size` | Размер изображения | 256 |
 | `--output_dir` | Директория чекпоинтов | ./checkpoints |
-| `--device` | Устройство (cuda/cpu) | cuda |
+| `--device` | Устройство (cuda/cpu) | auto |
+| `--num_workers` | Воркеры DataLoader (0 для Windows) | 0 |
+| `--use_amp` | Mixed Precision Training | False |
+| `--fast_mode` | Быстрая архитектура (оптимизирована) | True |
+| `--full_mode` | Полная архитектура (все ветви) | False |
+| `--resume` | Путь к чекпоинту для продолжения | None |
+| `--reset_lr` | Сбросить LR при resume | False |
+| `--reset_scheduler` | Сбросить scheduler при resume | False |
 
 ## Архитектура
 

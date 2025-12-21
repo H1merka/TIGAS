@@ -330,15 +330,36 @@ class TIGASTrainer:
         except Exception as e:
             print(f"[checkpoint] failed to save latest model: {e}", flush=True)
 
-    def load_checkpoint(self, checkpoint_path: str):
-        """Load checkpoint."""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+    def load_checkpoint(
+        self,
+        checkpoint_path: str,
+        reset_lr: bool = False,
+        reset_scheduler: bool = False,
+        new_lr: Optional[float] = None
+    ):
+        """
+        Load checkpoint.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file
+            reset_lr: If True, don't restore LR from checkpoint
+            reset_scheduler: If True, don't restore scheduler state
+            new_lr: If provided, set this LR after loading
+        """
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=self.device,
+            weights_only=False  # Явно указываем для подавления FutureWarning
+        )
 
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
-        if checkpoint['scheduler_state_dict'] and self.scheduler:
+        # Восстановление scheduler (если не сброшен)
+        if not reset_scheduler and checkpoint['scheduler_state_dict'] and self.scheduler:
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        elif reset_scheduler:
+            print("[resume] Scheduler state reset (starting fresh)")
 
         if checkpoint['scaler_state_dict'] and self.scaler:
             self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
@@ -349,36 +370,61 @@ class TIGASTrainer:
         self.train_history = checkpoint.get('train_history', [])
         self.val_history = checkpoint.get('val_history', [])
 
-        print(f"Loaded checkpoint from epoch {self.current_epoch}")
+        # Установка нового LR (если указан или reset_lr)
+        if new_lr is not None:
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = new_lr
+            print(f"[resume] Learning rate set to: {new_lr}")
+        elif reset_lr:
+            # Сохраняем текущий LR из optimizer (был установлен при создании)
+            print("[resume] Learning rate kept from config (not from checkpoint)")
+
+        loaded_lr = self.optimizer.param_groups[0]['lr']
+        print(f"Loaded checkpoint from epoch {self.current_epoch} (LR: {loaded_lr:.6f})")
 
     def train(
         self,
         num_epochs: int,
-        resume_from: Optional[str] = None
+        resume_from: Optional[str] = None,
+        reset_lr: bool = False,
+        reset_scheduler: bool = False,
+        new_lr: Optional[float] = None
     ):
         """
         Main training loop.
 
         Args:
-            num_epochs: Number of epochs to train
+            num_epochs: Number of ADDITIONAL epochs to train (not total!)
             resume_from: Path to checkpoint to resume from
+            reset_lr: If True, don't restore LR from checkpoint
+            reset_scheduler: If True, don't restore scheduler state  
+            new_lr: If provided, set this LR after loading checkpoint
         """
         # Resume if checkpoint provided
         if resume_from:
-            self.load_checkpoint(resume_from)
+            self.load_checkpoint(
+                resume_from,
+                reset_lr=reset_lr,
+                reset_scheduler=reset_scheduler,
+                new_lr=new_lr
+            )
 
+        # Вычисляем конечную эпоху
+        start_epoch = self.current_epoch
+        if resume_from:
+            start_epoch += 1  # Начинаем со следующей эпохи
+            end_epoch = start_epoch + num_epochs  # num_epochs = сколько ЕЩЁ эпох
+            print(f"Resuming from epoch {self.current_epoch}, will train {num_epochs} more epochs")
+            print(f"Epochs: {start_epoch} -> {end_epoch - 1}")
+        else:
+            end_epoch = num_epochs  # Без resume: num_epochs = всего эпох
+        
         print(f"Starting training for {num_epochs} epochs")
         print(f"Device: {self.device}")
         print(f"AMP: {self.use_amp}")
         print(f"Gradient accumulation: {self.gradient_accumulation_steps}")
-
-        start_epoch = self.current_epoch
-        # При resume начинаем со следующей эпохи (текущая уже завершена)
-        if resume_from:
-            start_epoch += 1
-            print(f"Resuming from epoch {self.current_epoch}, starting at epoch {start_epoch}")
         
-        for epoch in range(start_epoch, num_epochs):
+        for epoch in range(start_epoch, end_epoch):
             self.current_epoch = epoch
 
             # Train
