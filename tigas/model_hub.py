@@ -106,8 +106,6 @@ def download_default_model(
             repo_id=DEFAULT_MODEL_REPO,
             filename=model_filename,
             cache_dir=str(cache_dir),
-            resume_download=True,  # Resume if interrupted
-            local_dir_use_symlinks=False  # Real file, not symlink
         )
         
         if show_progress:
