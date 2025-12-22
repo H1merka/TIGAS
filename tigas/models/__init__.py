@@ -1,5 +1,5 @@
 """
-Neural network models for NAIR metric computation.
+Neural network models for TIGAS metric computation.
 """
 
 from .tigas_model import TIGASModel, create_tigas_model

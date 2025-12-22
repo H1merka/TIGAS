@@ -152,9 +152,19 @@ class TIGASModel(nn.Module):
         self._initialize_weights()
 
     def _normalize_input(self, x: torch.Tensor) -> torch.Tensor:
-        """Нормализовать входной тензор в допустимый диапазон."""
-        if x.min() < INPUT_MIN or x.max() > INPUT_MAX:
-            x = torch.clamp(x, INPUT_MIN, INPUT_MAX)
+        """
+        Нормализовать входной тензор в диапазон [-1, 1].
+        
+        Поддерживает входы в диапазонах:
+        - [0, 1]: преобразуется в [-1, 1]
+        - [-1, 1]: остаётся без изменений
+        - Другие: clamp в [-1, 1]
+        """
+        # Если вход в диапазоне [0, 1], преобразуем в [-1, 1]
+        if x.min() >= 0 and x.max() <= 1:
+            x = x * 2 - 1
+        # Clamp для гарантии корректного диапазона
+        x = torch.clamp(x, INPUT_MIN, INPUT_MAX)
         return x
 
     def _build_regression_head(

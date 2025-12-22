@@ -1,5 +1,5 @@
 """
-NAIR metric computation modules.
+TIGAS metric computation modules.
 """
 
 from .tigas_metric import TIGASMetric, compute_tigas_batch

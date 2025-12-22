@@ -4,34 +4,34 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-red.svg)](https://pytorch.org/)
 
-**TIGAS** — нейросетевая метрика для оценки подлинности и реалистичности изображений, разработанная для различения реальных/натуральных изображений от сгенерированных ИИ/поддельных.
+**TIGAS** is a neural network metric for assessing the authenticity and realism of images, designed to distinguish between real/natural images and AI-generated/fake images.
 
-## Описание
+## Description
 
-TIGAS предоставляет непрерывную оценку в диапазоне [0, 1]:
-- **1.0** — натуральное/реальное изображение
-- **0.0** — сгенерированное/поддельное изображение
+TIGAS provides a continuous score in the range [0, 1]:
+- **1.0** — natural/real image
+- **0.0** — generated/fake image
 
-### Ключевые особенности
+### Key Features
 
-- **Мультимодальный анализ**: комбинирует взаимодополняющие подходы к анализу
-  - Перцептивные признаки (многомасштабная CNN)
-  - Спектральный анализ (частотная область)
-  - Статистическая согласованность (анализ распределений)
-  - Локально-глобальная когерентность
+- **Multi-Modal Analysis**: combines complementary analysis approaches
+  - Perceptual features (multi-scale CNN)
+  - Spectral analysis (frequency domain)
+  - Statistical consistency (distribution analysis)
+  - Local-global coherence
 
-- **Полностью дифференцируема**: может использоваться как
-  - Метрика оценки качества изображений
-  - Функция потерь для обучения генеративных моделей
-  - Метрика оценки для задач генерации изображений
+- **Fully Differentiable**: can be used as
+  - Image quality assessment metric
+  - Loss function for training generative models
+  - Evaluation metric for image generation tasks
 
-- **Гибкое развертывание**:
-  - Вычисление на основе модели (обученная нейросеть)
-  - Вычисление на основе компонентов (без обученной модели)
+- **Flexible Deployment**:
+  - Model-based computation (trained neural network)
+  - Component-based computation (without trained model)
 
-## Установка
+## Installation
 
-### Базовая установка
+### Basic Installation
 
 ```bash
 git clone https://github.com/H1merka/TIGAS.git
@@ -40,15 +40,15 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### С поддержкой CUDA
+### With CUDA Support
 
 ```bash
 pip install -r requirements_cuda.txt
 ```
 
-### Зависимости
+### Dependencies
 
-**Основные зависимости:**
+**Core Dependencies:**
 - PyTorch >= 2.2.0
 - torchvision >= 0.17.0
 - NumPy >= 1.24.0
@@ -58,7 +58,7 @@ pip install -r requirements_cuda.txt
 - OpenCV >= 4.8.0
 - pandas >= 2.0.0
 
-## Быстрый старт
+## Quick Start
 
 ### Python API
 
@@ -66,48 +66,48 @@ pip install -r requirements_cuda.txt
 from tigas import TIGAS, compute_tigas_score
 import torch
 
-# Метод 1: Высокоуровневая функция
+# Method 1: High-level function
 score = compute_tigas_score('image.jpg', checkpoint_path='model.pt')
 print(f"TIGAS Score: {score:.4f}")
 
-# Метод 2: Объектно-ориентированный API
+# Method 2: Object-oriented API
 tigas = TIGAS(checkpoint_path='model.pt', img_size=256, device='cuda')
-score = tigas('image.jpg')  # Одно изображение
-scores = tigas(torch.randn(4, 3, 256, 256))  # Батч
-scores = tigas.compute_directory('path/to/images/')  # Директория
+score = tigas('image.jpg')  # Single image
+scores = tigas(torch.randn(4, 3, 256, 256))  # Batch
+scores = tigas.compute_directory('path/to/images/')  # Directory
 
-# Метод 3: Автозагрузка модели из HuggingFace Hub
-tigas = TIGAS(auto_download=True)  # Автоматически загружает модель из Hub
+# Method 3: Auto-download model from HuggingFace Hub
+tigas = TIGAS(auto_download=True)  # Automatically downloads model from Hub
 score = tigas('image.jpg')
 
-# Метод 4: Как функция потерь
+# Method 4: As a loss function
 generated_images = torch.randn(4, 3, 256, 256, requires_grad=True)
 scores = tigas(generated_images)
-loss = 1.0 - scores.mean()  # Максимизация подлинности
+loss = 1.0 - scores.mean()  # Maximize authenticity
 loss.backward()
 ```
 
-### Командная строка
+### Command Line
 
 ```bash
-# Оценка одного изображения
+# Evaluate single image
 python scripts/evaluate.py --image path/to/image.jpg --checkpoint model.pt
 
-# Оценка директории
+# Evaluate directory
 python scripts/evaluate.py --image_dir path/to/images/ --checkpoint model.pt --batch_size 32
 
-# С автозагрузкой модели из HuggingFace Hub
+# With auto-download from HuggingFace Hub
 python scripts/evaluate.py --image_dir images/ --auto_download
 
-# С сохранением результатов и визуализацией
+# With results saving and visualization
 python scripts/evaluate.py --image_dir images/ --output results.json --plot
 ```
 
-## Обучение
+## Training
 
-### Структура данных
+### Data Structure
 
-**Режим директорий:**
+**Directory mode:**
 ```
 dataset/
 ├── real/
@@ -120,7 +120,7 @@ dataset/
     └── ...
 ```
 
-**Режим CSV:**
+**CSV mode:**
 ```
 dataset/
 ├── train/
@@ -131,9 +131,12 @@ dataset/
 └── test/
     └── ...
 ```
-Валидация датасета (обязательный шаг)
 
-**ВАЖНО**: Перед обучением необходимо проверить целостность датасета:
+CSV format: `image_path,label` (1 — real, 0 — fake)
+
+### Dataset Validation (Required Step)
+
+**IMPORTANT**: Before training, you must validate dataset integrity:
 
 ```bash
 python scripts/validate_dataset.py \
@@ -143,12 +146,12 @@ python scripts/validate_dataset.py \
   --update_csv
 ```
 
-Это удалит поврежденные изображения и обновит CSV, предотвращая ошибки во время обучения.
+This will remove corrupted images and update CSV, preventing errors during training.
 
-### Запуск обучения
+### Running Training
 
 ```bash
-# Быстрое обучение (Fast Mode - по умолчанию, оптимизировано для скорости)
+# Fast training (Fast Mode - default, optimized for speed)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
@@ -158,7 +161,7 @@ python scripts/train_script.py \
   --use_amp \
   --output_dir ./checkpoints
 
-# Полное обучение (Full Mode - все ветви модели, выше точность)
+# Full training (Full Mode - all branches, higher accuracy)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
@@ -169,14 +172,14 @@ python scripts/train_script.py \
   --full_mode \
   --output_dir ./checkpoints
 
-# Обучение с CSV аннотациями (рекомендуется)
+# Training with CSV annotations (recommended)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --use_csv \
   --epochs 50 \
   --use_amp
 
-# Продолжение обучения с чекпоинта (ещё N эпох)
+# Resume training from checkpoint (N more epochs)
 python scripts/train_script.py \
   --data_root data/ \
   --resume checkpoints/best_model.pt \
@@ -184,7 +187,7 @@ python scripts/train_script.py \
   --lr 0.0001 \
   --reset_lr
 
-# Продолжение с полным сбросом LR и scheduler
+# Resume with full LR and scheduler reset
 python scripts/train_script.py \
   --data_root data/ \
   --resume checkpoints/best_model.pt \
@@ -194,125 +197,111 @@ python scripts/train_script.py \
   --reset_scheduler
 ```
 
-### Параметры обучения
+### Training Parameters
 
-| Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
-| `--data_root` | Путь к данным | Обязательный |
-| `--epochs` | Количество эпох (при resume — ещё N эпох) | 50 |
-| `--batch_size` | Размер батча | 16 |
-| `--lr` | Скорость обучения | 0.0000125 |
-| `--use_csv` | Использовать CSV аннотации | False |
-| `--img_size` | Размер изображения | 256 |
-| `--output_dir` | Директория чекпоинтов | ./checkpoints |
-| `--device` | Устройство (cuda/cpu) | auto |
-| `--num_workers` | Воркеры DataLoader (0 для Windows) | 0 |
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--data_root` | Path to data | Required |
+| `--epochs` | Number of epochs (on resume — N more epochs) | 50 |
+| `--batch_size` | Batch size | 16 |
+| `--lr` | Learning rate | 0.0000125 |
+| `--use_csv` | Use CSV annotations | False |
+| `--img_size` | Image size | 256 |
+| `--output_dir` | Checkpoint directory | ./checkpoints |
+| `--device` | Device (cuda/cpu) | auto |
+| `--num_workers` | DataLoader workers (0 for Windows) | 0 |
 | `--use_amp` | Mixed Precision Training | False |
-| `--fast_mode` | Быстрая архитектура (оптимизирована) | True |
-| `--full_mode` | Полная архитектура (все ветви) | False |
-| `--resume` | Путь к чекпоинту для продолжения | None |
-| `--reset_lr` | Сбросить LR при resume | False |
-| `--reset_scheduler` | Сбросить scheduler при resume | False |
+| `--fast_mode` | Fast architecture (optimized) | True |
+| `--full_mode` | Full architecture (all branches) | False |
+| `--resume` | Path to checkpoint for resuming | None |
+| `--reset_lr` | Reset LR on resume | False |
+| `--reset_scheduler` | Reset scheduler on resume | False |
 
-## Архитектура
+## Architecture
 
-### Модель TIGASModel
+### TIGASModel
 
-Многоветвевая нейронная сеть, включающая:
+Multi-branch neural network including:
 
-1. **Многомасштабный экстрактор признаков**
-   - 4-этапный CNN backbone (разрешения 1/2, 1/4, 1/8, 1/16)
-   - Сохраняет высокочастотные детали для обнаружения артефактов
-   - Дизайн, вдохновленный EfficientNet
+1. **Multi-Scale Feature Extractor**
+   - 4-stage CNN backbone (1/2, 1/4, 1/8, 1/16 resolutions)
+   - Preserves high-frequency details for artifact detection
+   - EfficientNet-inspired design
 
-2. **Спектральный анализатор**
-   - Анализ частотной области на основе FFT
-   - Обнаружение артефактов GAN (шахматные паттерны, неестественные спектры)
-   - Извлечение радиального профиля из спектра мощности
+2. **Spectral Analyzer**
+   - FFT-based frequency domain analysis
+   - Detection of GAN artifacts (checkerboard patterns, unnatural spectra)
+   - Radial profile extraction from power spectrum
 
-3. **Статистический оценщик моментов**
-   - Анализ согласованности распределений
-   - Обучаемая статистика натуральных изображений
-   - Сопоставление моментов с априорными данными
+3. **Statistical Moment Estimator**
+   - Distribution consistency analysis
+   - Learnable natural image statistics
+   - Moment matching against natural image priors
 
-4. **Механизмы внимания**
-   - Self-Attention для захвата дальних зависимостей
-   - Cross-Modal Attention для слияния признаков разных модальностей
+4. **Attention Mechanisms**
+   - Self-Attention for capturing long-range dependencies
+   - Cross-Modal Attention for fusing features from different modalities
 
-5. **Адаптивное слияние признаков**
-   - Обучаемое взвешивание 3 потоков признаков
-   - Комбинирование перцептивных, спектральных и статистических признаков
+5. **Adaptive Feature Fusion**
+   - Learnable weighting of 3 feature streams
+   - Combines perceptual, spectral, and statistical features
 
-## Структура проекта
+## Project Structure
 
 ```
 TIGAS/
-├── tigas/                          # Основной пакет
-│   ├── __init__.py                # Инициализация и экспорты
-│   ├── api.py                     # Высокоуровневый API (класс TIGAS)
+├── tigas/                          # Main package
+│   ├── __init__.py                # Initialization and exports
+│   ├── api.py                     # High-level API (TIGAS class)
 │   │
-│   ├── models/                    # Архитектуры нейросетей
-│   │   ├── tigas_model.py        # Основная модель TIGASModel
-│   │   ├── feature_extractors.py # Экстракторы признаков
-│   │   ├── attention.py          # Механизмы внимания
-│   │   ├── layers.py             # Пользовательские слои
-│   │   └── constants.py          # Константы конфигурации
+│   ├── models/                    # Neural network architectures
+│   │   ├── tigas_model.py        # Main TIGASModel architecture
+│   │   ├── feature_extractors.py # Feature extractors
+│   │   ├── attention.py          # Attention mechanisms
+│   │   ├── layers.py             # Custom layers
+│   │   └── constants.py          # Configuration constants
 │   │
-│   ├── metrics/                   # Модули вычисления метрик
-│   │   ├── tigas_metric.py       # Основной калькулятор метрики
-│   │   └── components.py         # Компоненты метрик
+│   ├── metrics/                   # Metric computation modules
+│   │   ├── tigas_metric.py       # Main metric calculator
+│   │   └── components.py         # Metric components
 │   │
-│   ├── data/                      # Загрузка и предобработка данных
-│   │   ├── dataset.py            # Классы датасетов
-│   │   ├── loaders.py            # Создание DataLoader
-│   │   └── transforms.py         # Аугментации и трансформации
+│   ├── data/                      # Data loading and preprocessing
+│   │   ├── dataset.py            # Dataset classes
+│   │   ├── loaders.py            # DataLoader creation
+│   │   └── transforms.py         # Augmentations and transforms
 │   │
-│   ├── training/                  # Инфраструктура обучения
-│   │   ├── trainer.py            # Основной класс тренера
-│   │   ├── losses.py             # Функции потерь
-│   │   └── optimizers.py         # Оптимизаторы и планировщики
+│   ├── training/                  # Training infrastructure
+│   │   ├── trainer.py            # Main trainer class
+│   │   ├── losses.py             # Loss functions
+│   │   └── optimizers.py         # Optimizers and schedulers
 │   │
-│   └── utils/                     # Утилиты
-│       ├── config.py             # Управление конфигурацией
-│       ├── input_processor.py    # Обработка входных данных
-│       └── visualization.py      # Визуализация
+│   └── utils/                     # Utilities
+│       ├── config.py             # Configuration management
+│       ├── input_processor.py    # Input data processing
+│       └── visualization.py      # Visualization
 │
-├── scripts/                       # Исполняемые скрипты
-│   ├── evaluate.py              # Скрипт оценки/инференса
-│   ├── example_usage.py          # Примеры использования
-│   └── train_script.py           # Скрипт обучения
+├── scripts/                       # Executable scripts
+│   ├── evaluate.py              # Evaluation/inference script
+│   ├── example_usage.py          # Usage examples
+│   └── train_script.py           # Training script
 │
-├── setup.py                     # Конфигурация пакета
-├── requirements.txt             # Зависимости
-├── requirements_cuda.txt        # CUDA-зависимости
-└── LICENSE                      # Лицензия MIT
+├── setup.py                     # Package configuration
+├── requirements.txt             # Dependencies
+├── requirements_cuda.txt        # CUDA dependencies
+└── LICENSE                      # MIT License
 ```
 
-## Примеры использования
+## Usage Examples
 
-### 1. Базовое использование
+### 1. Basic Usage
 
 ```python
 from tigas import TIGAS
 
 tigas = TIGAS(checkpoint_path='model.pt')
 score = tigas('test_image.jpg')
-print(f"Оценка подлинности: {score:.4f}")
+print(f"Authenticity score: {score:.4f}")
 ```
-
-### 2. Пакетная обработка
-
-```python
-from tigas import TIGAS
-import torch
-
-tigas = TIGAS(checkpoint_path='model.pt', device='cuda')
-images = torch.randn(8, 3, 256, 256)
-scores = tigas(images)
-print(f"Средняя оценка: {scores.mean():.4f}")
-```
-
-### 3. Извлечение признаков
 import torch
 
 tigas = TIGAS(checkpoint_path='model.pt')
@@ -321,26 +310,26 @@ outputs = tigas(image, return_features=True)
 
 score = outputs['score']
 features = outputs['features']
-print(f"Оценка: {score.item():.4f}")
-print(f"Доступные признаки: {list(features.keys())}")
-print(f"Размерность слитых признаков: {features['fused']
-tigas = TIGAS(checkpoint_path='model.pt', return_features=True)
-score, features = tigas('image.jpg')
-print(f"Размерность признаков: {features.shape}")
+print(f"Score: {score.item():.4f}")
+print(f"Available features: {list(features.keys())}")
+print(f"Fused features shape: {features['fused']
+from tigas import TIGAS
+import torch
+
+tigas = TIGAS(checkpoint_path='model.pt', device='cuda')
+images = torch.randn(8, 3, 256, 256)
+scores = tigas(images)
+print(f"Mean score: {scores.mean():.4f}")
 ```
 
-### 4. Использование как функции потерь
-
-```python
-from tigas import TIGAS
-Обработка директории с изображениями
+### 3. Directory Processing
 
 ```python
 from tigas import TIGAS
 
 tigas = TIGAS(checkpoint_path='model.pt')
 
-# Получить оценки для всех изображений
+# Get scores for all images
 results = tigas.compute_directory(
     'path/to/images/',
     return_paths=True,
@@ -348,11 +337,25 @@ results = tigas.compute_directory(
 )
 
 for img_path, score in results.items():
-    print(f"{img_path}: {score:.4f}"n()
+    print(f"{img_path}: {score:.4f}")
+print(f"Feature dimension: {features.shape}")
+```
+
+### 4. Using as Loss Function
+
+```python
+from tigas import TIGAS
+
+tigas = TIGAS(checkpoint_path='model.pt')
+
+# In generator training loop
+generated_images = generator(noise)
+authenticity_score = tigas(generated_images)
+loss = 1.0 - authenticity_score.mean()
 loss.backward()
 ```
 
-### 5. Метрика на основе компонентов
+### 5. Component-Based Metric
 
 ```python
 from tigas.metrics import TIGASMetric
@@ -361,30 +364,30 @@ metric = TIGASMetric(use_model=False)
 score = metric.compute(image_tensor)
 ```
 
-## Требования к изображениям
+## Image Requirements
 
-- **Форматы**: JPG, JPEG, PNG, BMP
-- **Разрешение**: по умолчанию 256x256 (настраивается)
-- Изображения автоматически масштабируются при необходимости
-- Нормализация в диапазон [-1, 1]
+- **Formats**: JPG, JPEG, PNG, BMP
+- **Resolution**: default 256x256 (configurable)
+- Images are automatically resized if needed
+- Normalized to [-1, 1] range
 
-## Возможности обучения
+## Training Features
 
-- **Mixed Precision Training**: ускоренное обучение с AMP
-- **Gradient Accumulation**: для больших эффективных размеров батча
-- **Learning Rate Scheduling**: косинусное затухание, warmup
-- **Early Stopping**: автоматическая остановка при переобучении
-- **TensorBoard Logging**: визуализация процесса обучения
-- **Checkpoint Management**: сохранение и загрузка моделей
+- **Mixed Precision Training**: accelerated training with AMP
+- **Gradient Accumulation**: for larger effective batch sizes
+- **Learning Rate Scheduling**: cosine annealing, warmup
+- **Early Stopping**: automatic stopping on overfitting
+- **TensorBoard Logging**: training process visualization
+- **Checkpoint Management**: model saving and loading
 
-## Лицензия
+## License
 
-Проект распространяется под лицензией MIT. Подробности см. в файле [LICENSE](LICENSE).
+This project is distributed under the MIT License. See [LICENSE](LICENSE) for details.
 
-## Авторы
+## Authors
 
-- Дмитрий Моргенштерн
+- Dmitrij Morgenshtern
 
-## Ссылки
+## Links
 
-- [Репозиторий GitHub](https://github.com/H1merka/TIGAS)
+- [GitHub Repository](https://github.com/H1merka/TIGAS)

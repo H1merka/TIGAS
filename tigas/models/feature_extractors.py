@@ -1,5 +1,5 @@
 """
-Feature extraction modules for NAIR metric.
+Feature extraction modules for TIGAS metric.
 Implements multi-scale, spectral, and statistical feature extractors.
 """
 

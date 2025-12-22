@@ -1,5 +1,5 @@
 """
-Attention mechanisms for NAIR model.
+Attention mechanisms for TIGAS model.
 Implements self-attention and cross-modal attention for feature fusion.
 """
 

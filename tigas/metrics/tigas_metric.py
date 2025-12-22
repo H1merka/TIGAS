@@ -94,9 +94,8 @@ class TIGASMetric(nn.Module):
         # Ensure images are on correct device
         images = images.to(self.device)
 
-        # Normalize to [-1, 1] if needed
-        if images.min() >= 0 and images.max() <= 1:
-            images = images * 2 - 1
+        # Note: Нормализация [0,1] -> [-1,1] теперь выполняется в TIGASModel._normalize_input()
+        # Здесь оставляем pass-through для совместимости
 
         # Compute using trained model
         results = self.compute(images, return_features=return_features)

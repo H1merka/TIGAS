@@ -1,5 +1,5 @@
 """
-Custom neural network layers for NAIR model.
+Custom neural network layers for TIGAS model.
 Implements specialized components for authenticity assessment.
 """
 
