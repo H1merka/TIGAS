@@ -166,7 +166,8 @@ class TIGAS(nn.Module):
         self,
         directory: str,
         return_paths: bool = False,
-        batch_size: int = 32
+        batch_size: int = 32,
+        max_images: Optional[int] = None
     ) -> Union[np.ndarray, Dict[str, float]]:
         """
         Compute TIGAS scores for all images in a directory.
@@ -175,6 +176,7 @@ class TIGAS(nn.Module):
             directory: Path to directory
             return_paths: Whether to return dict with paths as keys
             batch_size: Batch size for processing
+            max_images: Maximum number of images to process (None = all)
 
         Returns:
             scores: Array of scores or dict {path: score}
@@ -183,12 +185,16 @@ class TIGAS(nn.Module):
         image_paths = []
 
         # Find all images
-        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.JPEG']:
             image_paths.extend(directory.glob(f'**/{ext}'))
 
         if not image_paths:
             print(f"No images found in {directory}")
             return np.array([])
+
+        # Limit number of images if specified
+        if max_images is not None:
+            image_paths = image_paths[:max_images]
 
         print(f"Processing {len(image_paths)} images...")
 
@@ -267,7 +273,8 @@ class TIGAS(nn.Module):
 def compute_tigas_score(
     image: Union[str, Path, Image.Image, torch.Tensor],
     checkpoint_path: Optional[str] = None,
-    device: Optional[str] = None
+    device: Optional[str] = None,
+    auto_download: bool = True
 ) -> float:
     """
     Convenience function to compute TIGAS score for a single image.
@@ -276,6 +283,7 @@ def compute_tigas_score(
         image: Input image (path, PIL Image, or tensor)
         checkpoint_path: Path to pretrained checkpoint
         device: Device to use
+        auto_download: Automatically download model from HuggingFace Hub if not found
 
     Returns:
         TIGAS score (float)
@@ -284,7 +292,7 @@ def compute_tigas_score(
         >>> score = compute_tigas_score('image.jpg', checkpoint_path='model.pt')
         >>> print(f"Score: {score:.3f}")
     """
-    tigas = TIGAS(checkpoint_path=checkpoint_path, device=device)
+    tigas = TIGAS(checkpoint_path=checkpoint_path, device=device, auto_download=auto_download)
     return tigas.compute_image(image) if isinstance(image, (str, Path)) else tigas(image).item()
 
 

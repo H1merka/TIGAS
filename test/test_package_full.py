@@ -52,7 +52,7 @@ def main():
         "--test_dir",
         type=str,
         default=r"C:\Dev\TIGAS_dataset\TIGAS\test",
-        help="Path to test dataset with real/fake subdirs"
+        help="Path to test dataset"
     )
     parser.add_argument(
         "--skip-vis",
@@ -62,12 +62,38 @@ def main():
     args = parser.parse_args()
     
     test_dir = Path(args.test_dir)
-    has_test_images = test_dir.exists() and (test_dir / "real").exists() and (test_dir / "fake").exists()
+    
+    # Поддержка разных структур датасета:
+    # 1. test_dir/real/ и test_dir/fake/
+    # 2. test_dir/images/{generator}/0_real/ и 1_fake/
+    real_dirs = []
+    fake_dirs = []
+    
+    if (test_dir / "real").exists():
+        real_dirs.append(test_dir / "real")
+    if (test_dir / "fake").exists():
+        fake_dirs.append(test_dir / "fake")
+    
+    # Поиск в структуре images/{generator}/0_real, 1_fake
+    images_dir = test_dir / "images"
+    if images_dir.exists():
+        for generator_dir in images_dir.iterdir():
+            if generator_dir.is_dir():
+                real_sub = generator_dir / "0_real"
+                fake_sub = generator_dir / "1_fake"
+                if real_sub.exists():
+                    real_dirs.append(real_sub)
+                if fake_sub.exists():
+                    fake_dirs.append(fake_sub)
+    
+    has_test_images = len(real_dirs) > 0 and len(fake_dirs) > 0
     
     print("=" * 60)
     print("TIGAS Package - Full Test Suite")
     print("=" * 60)
     print(f"Test directory: {test_dir}")
+    print(f"Real image dirs found: {len(real_dirs)}")
+    print(f"Fake image dirs found: {len(fake_dirs)}")
     print(f"Test images available: {has_test_images}")
     print(f"Skip visualization: {args.skip_vis}")
     
@@ -214,21 +240,32 @@ def main():
     # ==================== 6. Real Images ====================
     print("\n[6/9] Testing with real images...")
     
+    def find_images(dirs, extensions=('*.jpg', '*.jpeg', '*.png', '*.JPEG')):
+        """Найти изображения в списке директорий."""
+        images = []
+        for d in dirs:
+            for ext in extensions:
+                images.extend(d.glob(ext))
+        return images
+    
     if has_test_images:
         def test_single_image():
             from tigas import TIGAS
             tigas = TIGAS(auto_download=True, device='cuda' if has_cuda else 'cpu')
-            real_images = list((test_dir / "real").glob("*.jpg")) + list((test_dir / "real").glob("*.png"))
+            real_images = find_images(real_dirs)
             if real_images:
                 score = tigas(str(real_images[0]))
                 print(f"    Real image score: {score.item():.4f}")
                 assert 0 <= score.item() <= 1
+            else:
+                raise ValueError("No real images found")
         test("Single image inference", test_single_image)
         
         def test_directory_inference():
             from tigas import TIGAS
             tigas = TIGAS(auto_download=True, device='cuda' if has_cuda else 'cpu')
-            scores = tigas.compute_directory(str(test_dir / "real"), max_images=10)
+            # Берём первую директорию с real изображениями
+            scores = tigas.compute_directory(str(real_dirs[0]), max_images=10)
             print(f"    Processed {len(scores)} images, mean score: {scores.mean():.4f}")
         test("Directory inference", test_directory_inference)
         
@@ -236,22 +273,38 @@ def main():
             from tigas import TIGAS
             tigas = TIGAS(auto_download=True, device='cuda' if has_cuda else 'cpu')
             
-            real_scores = tigas.compute_directory(str(test_dir / "real"), max_images=20)
-            fake_scores = tigas.compute_directory(str(test_dir / "fake"), max_images=20)
+            # Собираем изображения из всех директорий
+            real_images = find_images(real_dirs)[:20]
+            fake_images = find_images(fake_dirs)[:20]
             
-            real_mean = real_scores.mean().item()
-            fake_mean = fake_scores.mean().item()
+            real_scores = []
+            for img_path in real_images:
+                score = tigas(str(img_path))
+                real_scores.append(score.item())
             
-            print(f"    Real mean: {real_mean:.4f}, Fake mean: {fake_mean:.4f}")
-            # Real should generally score higher than fake
-            # But don't fail the test if not - model quality varies
+            fake_scores = []
+            for img_path in fake_images:
+                score = tigas(str(img_path))
+                fake_scores.append(score.item())
+            
+            real_mean = sum(real_scores) / len(real_scores) if real_scores else 0
+            fake_mean = sum(fake_scores) / len(fake_scores) if fake_scores else 0
+            
+            print(f"    Real mean: {real_mean:.4f} ({len(real_scores)} images)")
+            print(f"    Fake mean: {fake_mean:.4f} ({len(fake_scores)} images)")
+            
+            # Проверяем что модель различает real/fake (real должен быть выше)
+            if real_mean > fake_mean:
+                print(f"    ✓ Model correctly discriminates (diff: {real_mean - fake_mean:.4f})")
+            else:
+                print(f"    ⚠ Model discrimination weak (diff: {real_mean - fake_mean:.4f})")
         test("Real vs Fake discrimination", test_real_vs_fake)
         
         def test_pil_input():
             from tigas import TIGAS
             from PIL import Image
             tigas = TIGAS(auto_download=True, device='cpu')
-            real_images = list((test_dir / "real").glob("*.jpg")) + list((test_dir / "real").glob("*.png"))
+            real_images = find_images(real_dirs)
             if real_images:
                 img = Image.open(real_images[0]).convert('RGB')
                 score = tigas(img)
@@ -259,6 +312,8 @@ def main():
         test("PIL Image input", test_pil_input)
     else:
         print(f"  ⊘ Test images not found at {test_dir}")
+        print(f"    Expected structure: test_dir/real/ and test_dir/fake/")
+        print(f"    Or: test_dir/images/{{generator}}/0_real/ and 1_fake/")
         skipped += 4
     
     # ==================== 7. Model Hub ====================
@@ -267,6 +322,7 @@ def main():
     def test_cache_info():
         from tigas import cache_info
         info = cache_info()
+        assert isinstance(info, dict), f"cache_info should return dict, got {type(info)}"
         assert 'cache_dir' in info
         print(f"    Cache dir: {info['cache_dir']}")
     test("cache_info", test_cache_info)
@@ -281,7 +337,17 @@ def main():
     # ==================== 8. Visualization ====================
     print("\n[8/9] Testing visualization...")
     
-    if not args.skip_vis:
+    # Проверяем наличие matplotlib
+    try:
+        import matplotlib
+        has_matplotlib = True
+    except ImportError:
+        has_matplotlib = False
+    
+    skip_vis = args.skip_vis or not has_matplotlib
+    skip_vis_reason = "--skip-vis" if args.skip_vis else "matplotlib not installed (pip install tigas-metric[vis])"
+    
+    if not skip_vis:
         def test_matplotlib_available():
             import matplotlib
             matplotlib.use('Agg')  # Non-interactive backend
@@ -292,36 +358,48 @@ def main():
             from tigas.utils.visualization import visualize_predictions
             import matplotlib
             matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
             
             images = torch.randn(4, 3, 256, 256)
-            scores = torch.tensor([0.9, 0.8, 0.3, 0.1])
-            labels = torch.tensor([1.0, 1.0, 0.0, 0.0])
+            # scores должен быть [B, 1], не [B]
+            scores = torch.tensor([[0.9], [0.8], [0.3], [0.1]])
+            labels = torch.tensor([[1.0], [1.0], [0.0], [0.0]])
             
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-                fig = visualize_predictions(images, scores, labels, save_path=f.name)
-                assert Path(f.name).exists()
-                Path(f.name).unlink()  # Cleanup
+                temp_path = f.name
+            visualize_predictions(images, scores, labels, save_path=temp_path)
+            assert Path(temp_path).exists()
+            plt.close('all')  # Close all figures to release file handles (Windows)
+            Path(temp_path).unlink()  # Cleanup
         test("visualize_predictions", test_visualize_predictions)
         
         def test_plot_training_history():
             from tigas.utils.visualization import plot_training_history
             import matplotlib
             matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
             
-            history = {
-                'train_loss': [0.5, 0.4, 0.3, 0.2],
-                'val_loss': [0.6, 0.5, 0.4, 0.35],
-                'train_acc': [0.7, 0.8, 0.85, 0.9],
-                'val_acc': [0.65, 0.75, 0.8, 0.82]
-            }
+            # Функция ожидает два списка словарей: train_history и val_history
+            train_history = [
+                {'total': 0.5, 'regression': 0.3, 'classification': 0.2},
+                {'total': 0.4, 'regression': 0.25, 'classification': 0.15},
+                {'total': 0.3, 'regression': 0.2, 'classification': 0.1},
+            ]
+            val_history = [
+                {'total': 0.6, 'regression': 0.35, 'classification': 0.25},
+                {'total': 0.5, 'regression': 0.3, 'classification': 0.2},
+                {'total': 0.4, 'regression': 0.25, 'classification': 0.15},
+            ]
             
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
-                fig = plot_training_history(history, save_path=f.name)
-                assert Path(f.name).exists()
-                Path(f.name).unlink()
+                temp_path = f.name
+            plot_training_history(train_history, val_history, save_path=temp_path)
+            assert Path(temp_path).exists()
+            plt.close('all')  # Close all figures to release file handles (Windows)
+            Path(temp_path).unlink()
         test("plot_training_history", test_plot_training_history)
     else:
-        print("  ⊘ Visualization tests skipped (--skip-vis)")
+        print(f"  ⊘ Visualization tests skipped ({skip_vis_reason})")
         skipped += 3
     
     # ==================== 9. Edge Cases ====================

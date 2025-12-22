@@ -39,12 +39,18 @@ def check_model_in_cache(model_filename: str = DEFAULT_MODEL_FILE) -> Optional[s
         Path to cached model if exists, None otherwise
     """
     cache_dir = get_cache_dir()
-    model_path = cache_dir / model_filename
     
+    # Прямой путь в корне кэша
+    model_path = cache_dir / model_filename
     if model_path.exists():
         return str(model_path)
     
-    # Also check huggingface hub cache if available
+    # Поиск рекурсивно (HF Hub хранит в подпапках snapshots/)
+    for found in cache_dir.glob(f'**/{model_filename}'):
+        if found.is_file():
+            return str(found)
+    
+    # Проверка через HF Hub API
     if HF_HUB_AVAILABLE:
         try:
             cached_path = try_to_load_from_cache(
@@ -172,9 +178,20 @@ def clear_cache():
         print(f"[TIGAS] Cache directory does not exist: {cache_dir}")
 
 
-def cache_info():
-    """Print information about cached models."""
+def cache_info() -> dict:
+    """Get information about cached models.
+    
+    Returns:
+        Dictionary with cache information
+    """
     cache_dir = get_cache_dir()
+    
+    info = {
+        'cache_dir': str(cache_dir),
+        'cache_exists': cache_dir.exists(),
+        'models': [],
+        'total_size_mb': 0.0
+    }
     
     print(f"TIGAS Model Cache Information")
     print(f"=" * 60)
@@ -182,7 +199,9 @@ def cache_info():
     print(f"Cache exists: {cache_dir.exists()}")
     
     if cache_dir.exists():
-        models = list(cache_dir.glob('*.pt'))
+        # Ищем модели рекурсивно (HF Hub хранит в подпапках)
+        models = list(cache_dir.glob('**/*.pt'))
+        info['models'] = [str(m) for m in models]
         print(f"Cached models: {len(models)}")
         
         total_size = 0
@@ -191,8 +210,11 @@ def cache_info():
             total_size += size_mb
             print(f"  - {model_path.name}: {size_mb:.2f} MB")
         
+        info['total_size_mb'] = total_size
         print(f"Total cache size: {total_size:.2f} MB")
     else:
         print(f"No models cached yet")
     
     print(f"=" * 60)
+    
+    return info

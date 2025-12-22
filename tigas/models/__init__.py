@@ -2,7 +2,7 @@
 Neural network models for NAIR metric computation.
 """
 
-from .tigas_model import TIGASModel
+from .tigas_model import TIGASModel, create_tigas_model
 from .feature_extractors import (
     MultiScaleFeatureExtractor,
     SpectralAnalyzer,
@@ -13,6 +13,7 @@ from .layers import FrequencyBlock, AdaptiveFeatureFusion
 
 __all__ = [
     "TIGASModel",
+    "create_tigas_model",
     "MultiScaleFeatureExtractor",
     "SpectralAnalyzer",
     "StatisticalMomentEstimator",

@@ -47,6 +47,8 @@ setup(
         "torch>=2.2.0",  # PyTorch core dependency
         "torchvision>=0.17.0",  # For image transforms
         "huggingface-hub>=0.19.0",  # For automatic model download
+        "matplotlib>=3.5.0",  # For visualization
+        "seaborn>=0.11.0",  # For visualization
     ],
     extras_require={
         "dev": [
@@ -56,10 +58,6 @@ setup(
             "flake8>=4.0.0",
             "isort>=5.10.0",
             "mypy>=0.950",
-        ],
-        "vis": [
-            "matplotlib>=3.5.0",
-            "seaborn>=0.11.0",
         ],
         "training": [
             "tensorboard>=2.9.0",

@@ -469,7 +469,7 @@ def create_tigas_model(
     model = TIGASModel(img_size=img_size, fast_mode=fast_mode, **kwargs)
 
     if pretrained and checkpoint_path is not None:
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         # Handle both fast_mode and full model checkpoints
         try:
             model.load_state_dict(checkpoint['model_state_dict'], strict=False)

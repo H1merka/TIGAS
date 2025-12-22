@@ -193,7 +193,7 @@ def get_inference_transforms(
         transforms: Composed transforms
     """
     transforms_list = [
-        T.Resize(img_size),
+        T.Resize((img_size, img_size)),  # Force square resize
         T.ToTensor(),
     ]
 

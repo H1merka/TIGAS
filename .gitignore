@@ -220,3 +220,6 @@ docs/
 
 # directory for model publishing
 model_publish/
+
+# virtual environment for testing
+test_venv/
