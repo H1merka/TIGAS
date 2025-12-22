@@ -215,7 +215,6 @@ weights/
 checkpoints/
 
 # directory with project documents
-docs/
 .github/
 
 # directory for model publishing
