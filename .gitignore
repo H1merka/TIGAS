@@ -205,3 +205,20 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# claude files and dirs
+CLAUDE.md
+.claude/
+
+# models's weights and cache
+weights/
+checkpoints/
+
+# directory with project documents
+.github/
+
+# directory for model publishing
+model_publish/
+
+# virtual environment for testing
+test_venv/
