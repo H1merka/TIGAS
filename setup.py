@@ -13,19 +13,12 @@ if readme_file.exists():
     with open(readme_file, "r", encoding="utf-8") as f:
         long_description = f.read()
 
-# Read requirements
-requirements_file = Path(__file__).parent / "requirements.txt"
-requirements = []
-if requirements_file.exists():
-    with open(requirements_file, "r") as f:
-        requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-
 setup(
     name="tigas-metric",
-    version="0.1.0",
+    version="0.1.1",
     author="TIGAS Project Team",
-    author_email="tigas@example.com",
-    description="Trained Image Generation Authenticity Score - A novel metric for assessing image realism",
+    author_email="morgenstern.dmitrij.701@gmail.com",
+    description="Trained Image Generation Authenticity Score - A neural metric for assessing image realism",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/H1merka/TIGAS",
@@ -43,12 +36,19 @@ setup(
         "Programming Language :: Python :: 3.11",
     ],
     python_requires=">=3.8",
-    install_requires=requirements + [
-        "torch>=2.2.0",  # PyTorch core dependency
-        "torchvision>=0.17.0",  # For image transforms
-        "huggingface-hub>=0.19.0",  # For automatic model download
-        "matplotlib>=3.5.0",  # For visualization
-        "seaborn>=0.11.0",  # For visualization
+    install_requires=[
+        "torch>=2.2.0",
+        "torchvision>=0.17.0",
+        "numpy>=1.24.0",
+        "scipy>=1.10.0",
+        "scikit-learn>=1.3.0",
+        "pillow>=10.0.0",
+        "opencv-python>=4.8.0",
+        "pandas>=2.0.0",
+        "huggingface-hub>=0.19.0",
+        "matplotlib>=3.5.0",
+        "seaborn>=0.11.0",
+        "tqdm>=4.60.0",
     ],
     extras_require={
         "dev": [
@@ -58,6 +58,8 @@ setup(
             "flake8>=4.0.0",
             "isort>=5.10.0",
             "mypy>=0.950",
+            "twine>=4.0.0",
+            "build>=0.7.0",
         ],
         "training": [
             "tensorboard>=2.9.0",

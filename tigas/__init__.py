@@ -10,7 +10,7 @@ License: MIT
 Version: 0.1.0
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "TIGAS Project Team"
 
 from .api import TIGAS, compute_tigas_score, load_tigas
