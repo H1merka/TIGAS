@@ -153,23 +153,22 @@ python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
   --batch_size 16 \
-  --img_size 128 \
-  --lr 0.0003 \
+  --lr 0.0001 \
   --use_amp \
   --output_dir ./checkpoints
 
 # Полное обучение (Full Mode - все ветви модели, выше точность)
+# ~18.6M параметров, требует больше GPU памяти
 python scripts/train_script.py \
   --data_root /path/to/data \
   --epochs 50 \
   --batch_size 8 \
-  --img_size 256 \
-  --lr 0.0001 \
+  --lr 0.00005 \
   --use_amp \
   --full_mode \
   --output_dir ./checkpoints
 
-# Обучение с CSV аннотациями (рекомендуется)
+# Обучение с CSV аннотациями (рекомендуется для больших датасетов)
 python scripts/train_script.py \
   --data_root /path/to/data \
   --use_csv \
@@ -196,8 +195,7 @@ python scripts/train_script.py \
 
 ### Параметры обучения
 
-| Параметр | Описание | По умолчанию |
-|----------|----------|--------------|
+| Параметр | Описание | По умолчанию |\n|----------|----------|--------------|
 | `--data_root` | Путь к данным | Обязательный |
 | `--epochs` | Количество эпох (при resume — ещё N эпох) | 50 |
 | `--batch_size` | Размер батча | 16 |
@@ -208,11 +206,14 @@ python scripts/train_script.py \
 | `--device` | Устройство (cuda/cpu) | auto |
 | `--num_workers` | Воркеры DataLoader (0 для Windows) | 0 |
 | `--use_amp` | Mixed Precision Training | False |
-| `--fast_mode` | Быстрая архитектура (оптимизирована) | True |
-| `--full_mode` | Полная архитектура (все ветви) | False |
+| `--fast_mode` | Быстрая архитектура (~2.5M параметров) | True |
+| `--full_mode` | Полная архитектура (~18.6M параметров) | False |
 | `--resume` | Путь к чекпоинту для продолжения | None |
 | `--reset_lr` | Сбросить LR при resume | False |
 | `--reset_scheduler` | Сбросить scheduler при resume | False |
+| `--regression_weight` | Вес regression loss | 1.0 |
+| `--classification_weight` | Вес classification loss | 0.3 |
+| `--ranking_weight` | Вес ranking loss | 0.2 |
 
 ## Архитектура
 
@@ -225,19 +226,21 @@ python scripts/train_script.py \
    - Сохраняет высокочастотные детали для обнаружения артефактов
    - Дизайн, вдохновленный EfficientNet
 
-2. **Спектральный анализатор**
-   - Анализ частотной области на основе FFT
-   - Обнаружение артефактов GAN (шахматные паттерны, неестественные спектры)
-   - Извлечение радиального профиля из спектра мощности
+2. **Спектральный анализатор** (Full Mode)
+   - Анализ магнитуды и фазы FFT
+   - Радиальный спектр мощности (1/f decay анализ)
+   - Азимутальная статистика (8 секторов)
+   - Обнаружение шахматных паттернов от transposed convolutions
 
-3. **Статистический оценщик моментов**
-   - Анализ согласованности распределений
-   - Обучаемая статистика натуральных изображений
-   - Сопоставление моментов с априорными данными
+3. **Статистический оценщик моментов** (Full Mode)
+   - EMA-прототипы статистики реальных изображений
+   - Сравнение: diff, interaction, cosine similarity
+   - 4 момента × 3 канала: mean, variance, skewness, kurtosis
 
 4. **Механизмы внимания**
    - Self-Attention для захвата дальних зависимостей
    - Cross-Modal Attention для слияния признаков разных модальностей
+   - Численная стабильность: clamping + NaN fallback
 
 5. **Адаптивное слияние признаков**
    - Обучаемое взвешивание 3 потоков признаков

@@ -156,13 +156,40 @@ print(f"Ratio: {real_count / fake_count:.2f}")
 ```python
 from tigas.data.dataset import RealFakeDataset
 
-# Автоматическая балансировка
+# Балансировка через oversampling (повторение меньшего класса)
 dataset = RealFakeDataset(
     real_images=real_paths,
     fake_images=fake_paths,
-    balance=True  # Выравнивает количество real/fake
+    balance=True,
+    balance_method='oversample'  # 'oversample' или 'undersample'
+)
+
+# balance_method='oversample' - повторяет minority class (рекомендуется)
+# balance_method='undersample' - обрезает majority class (теряет данные)
+```
+
+---
+
+## Стратифицированное разбиение
+
+При разбиении датасета на train/val/test по умолчанию используется **стратифицированное разбиение**, которое сохраняет пропорции классов во всех сплитах.
+
+```python
+from tigas.data.loaders import create_dataloaders
+
+# stratified=True по умолчанию
+loaders = create_dataloaders(
+    data_root='./dataset',
+    train_split=0.8,
+    val_split=0.1,
+    stratified=True  # Сохраняет баланс классов в каждом сплите
 )
 ```
+
+**Преимущества:**
+- Каждый сплит имеет примерно одинаковое соотношение real/fake
+- Валидация и тестирование более репрезентативны
+- Избегает случаев, когда в val/test попадает непропорционально много одного класса
 
 ---
 

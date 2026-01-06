@@ -12,13 +12,16 @@ import numpy as np
 
 class FrequencyBlock(nn.Module):
     """
-    Frequency domain analysis block using DCT.
+    Frequency domain analysis block using FFT-based high-frequency extraction.
     Analyzes spectral characteristics to detect GAN artifacts.
 
     GAN-generated images often have distinctive frequency patterns:
     - Checkerboard artifacts in high frequencies
     - Unnatural spectral distributions
     - Mode collapse indicators in frequency domain
+    
+    This block extracts frequency-domain features and uses learned attention
+    to focus on discriminative frequency bands.
     """
 
     def __init__(self, channels: int, reduction: int = 16):
@@ -42,35 +45,83 @@ class FrequencyBlock(nn.Module):
             nn.Conv2d(channels, channels, 3, padding=1),
             nn.BatchNorm2d(channels)
         )
+        
+        # High-frequency filter (learnable threshold)
+        self.high_freq_threshold = nn.Parameter(torch.tensor(0.3))
 
-    def dct2d(self, x: torch.Tensor) -> torch.Tensor:
+    def _extract_high_frequency(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Simplified DCT approximation using spatial convolutions.
-        OPTIMIZED: Avoids FFT entirely for speed with AMP.
+        Extract high-frequency components using FFT.
+        
+        High frequencies often contain GAN artifacts like checkerboard patterns
+        from transposed convolutions.
+        
+        Args:
+            x: Input tensor [B, C, H, W]
+            
+        Returns:
+            high_freq: High-frequency components [B, C, H, W]
         """
-        # Use Laplacian-like filter as frequency approximation (much faster than FFT)
-        # This captures high-frequency content without FFT overhead
-        return x  # Pass through - spectral_conv will learn frequency-like features
+        B, C, H, W = x.shape
+        
+        # Compute FFT with AMP-safe float32
+        with torch.amp.autocast('cuda', enabled=False):
+            x_float = x.float()
+            
+            # 2D FFT
+            freq = torch.fft.fft2(x_float, dim=(-2, -1))
+            freq_shifted = torch.fft.fftshift(freq, dim=(-2, -1))
+            
+            # Create high-pass filter mask
+            # Distance from center (DC component)
+            cy, cx = H // 2, W // 2
+            y = torch.arange(H, device=x.device, dtype=torch.float32) - cy
+            x_coord = torch.arange(W, device=x.device, dtype=torch.float32) - cx
+            yy, xx = torch.meshgrid(y, x_coord, indexing='ij')
+            
+            # Normalized distance
+            max_dist = np.sqrt(cy**2 + cx**2)
+            dist = torch.sqrt(yy**2 + xx**2) / max_dist
+            
+            # Smooth high-pass filter (sigmoid transition)
+            threshold = torch.sigmoid(self.high_freq_threshold * 10)  # Scale for sharper transition
+            high_pass = torch.sigmoid((dist - threshold) * 20)  # Smooth transition
+            high_pass = high_pass.view(1, 1, H, W)
+            
+            # Apply filter
+            freq_filtered = freq_shifted * high_pass
+            
+            # Inverse FFT
+            freq_unshifted = torch.fft.ifftshift(freq_filtered, dim=(-2, -1))
+            high_freq = torch.fft.ifft2(freq_unshifted, dim=(-2, -1))
+            high_freq = torch.real(high_freq)
+        
+        return high_freq.to(x.dtype)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
+        Extract frequency-aware features.
+        
         Args:
             x: Input tensor [B, C, H, W]
 
         Returns:
-            spatial_features: Enhanced spatial features
-            freq_features: Frequency domain features
+            spatial_features: Enhanced spatial features with frequency attention
+            freq_features: High-frequency extracted features
         """
-        # Skip DCT - let convolutions learn frequency-relevant features directly
-        # Extract spectral features directly from input
-        freq_feat = self.spectral_conv(x)
+        # Extract high-frequency components via FFT
+        high_freq = self._extract_high_frequency(x)
+        
+        # Process high-frequency through conv layers
+        freq_feat = self.spectral_conv(high_freq)
 
         # Concatenate spatial and frequency for attention
         combined = torch.cat([x, freq_feat], dim=1)
         attention = self.freq_attention(combined)
 
         # Apply attention to spatial features
-        spatial_out = x * attention
+        # This emphasizes regions where frequency artifacts are detected
+        spatial_out = x * attention + x  # Residual connection
 
         return spatial_out, freq_feat
 
@@ -86,9 +137,11 @@ class AdaptiveFeatureFusion(nn.Module):
         self.num_streams = num_streams
         self.feature_dim = feature_dim
 
-        # Learnable fusion weights
+        # Learnable fusion weights with small random initialization
+        # Random init breaks symmetry and allows each stream to specialize
+        # Scale 0.1 keeps weights near uniform while enabling learning
         self.fusion_weights = nn.Parameter(
-            torch.ones(num_streams) / num_streams
+            torch.randn(num_streams) * 0.1 + 1.0 / num_streams
         )
 
         # Feature transformation before fusion

@@ -95,19 +95,28 @@ features = extractor(x)
 
 ### SpectralAnalyzer
 
-Анализатор частотных характеристик изображения.
+Анализатор частотных характеристик изображения для обнаружения GAN-артефактов.
 
 **Расположение:** [tigas/models/feature_extractors.py](../tigas/models/feature_extractors.py)
 
 ```python
 class SpectralAnalyzer(nn.Module):
     """
-    Анализатор спектральных признаков:
-    - FFT анализ магнитуды
-    - Частотные band extraction
-    - Энергетическое распределение
+    Комплексный анализатор спектральных признаков:
+    - FFT анализ магнитуды и фазы
+    - Радиальный спектр мощности (1/f decay)
+    - Азимутальная статистика (направленные артефакты)
+    - Обнаружение шахматных паттернов от transposed conv
     """
 ```
+
+#### Что детектирует
+
+GAN-сгенерированные изображения обычно показывают:
+- **Аномальные высокочастотные пики** — шахматные паттерны от transposed convolutions
+- **Отклонение от 1/f² decay** — натуральные изображения имеют характерный спад
+- **Фазовая некогерентность** — паттерны несогласованности фазы
+- **Азимутальная асимметрия** — направленные артефакты в частотной области
 
 #### Архитектура
 
@@ -117,70 +126,98 @@ Input [B, 3, H, W]
        ▼ (float32 для FFT)
 ┌─────────────────────────────────────────┐
 │  torch.fft.rfft2(x)                     │
-│  → Complex spectrum [B, 3, H, H//2+1]   │
-│  → Magnitude: torch.abs(freq)           │
+│  → Complex spectrum [B, 3, H, W//2+1]   │
 └────────────────┬────────────────────────┘
                  │
-       ┌─────────┴─────────┐
-       ▼                   ▼
-┌──────────────┐    ┌──────────────┐
-│ Low-freq     │    │ High-freq    │
-│ Band         │    │ Band         │
-│ (DC - 0.2)   │    │ (0.2 - 0.5)  │
-└──────┬───────┘    └──────┬───────┘
-       │                   │
-       └─────────┬─────────┘
-                 ▼
-┌────────────────────────────────────────┐
-│ Energy Distribution Features           │
-│ + Band Statistics                       │
-│ + Spectral Centroid                    │
-└────────────────┬───────────────────────┘
+     ┌───────────┼───────────┐
+     ▼           ▼           ▼
+┌─────────┐ ┌─────────┐ ┌──────────────┐
+│Magnitude│ │  Phase  │ │   Radial     │
+│ Encoder │ │ Encoder │ │  Spectrum    │
+│  (CNN)  │ │  (CNN)  │ │  Analyzer    │
+└────┬────┘ └────┬────┘ └──────┬───────┘
+     │           │             │
+     │      ┌────┘             │
+     │      │    ┌─────────────┘
+     │      │    │
+     │      │    │    ┌───────────────┐
+     │      │    │    │  Azimuthal    │
+     │      │    │    │  Statistics   │
+     │      │    │    │ (mean + std)  │
+     │      │    │    └───────┬───────┘
+     │      │    │            │
+     └──────┴────┴────────────┘
                  │
                  ▼
 ┌────────────────────────────────────────┐
-│ MLP: Linear layers + normalization     │
-│ → [B, feature_dim]                     │
+│  Projection MLP                        │
+│  [combined_dim] → [hidden_dim * 2]     │
+│  → LayerNorm → ReLU → Dropout          │
+│  → [hidden_dim]                        │
 └────────────────────────────────────────┘
 ```
+
+#### Компоненты
+
+| Компонент | Описание |
+|-----------|----------|
+| `mag_encoder` | CNN для анализа магнитуды FFT |
+| `phase_encoder` | CNN для анализа фазы FFT |
+| `radial_analyzer` | 1D Conv для радиального спектра (32 bins) |
+| `azimuthal stats` | Статистика по 8 угловым секторам |
 
 #### Параметры
 
 | Параметр | Default | Описание |
 |----------|---------|----------|
-| `feature_dim` | 256 | Выходная размерность |
+| `in_channels` | 3 | Входные каналы (RGB) |
+| `hidden_dim` | 128 | Скрытая размерность |
+| `num_radial_bins` | 32 | Количество радиальных бинов |
+| `num_azimuthal_bins` | 8 | Количество азимутальных секторов |
 
 #### Использование
 
 ```python
 from tigas.models.feature_extractors import SpectralAnalyzer
 
-analyzer = SpectralAnalyzer(feature_dim=256)
+analyzer = SpectralAnalyzer(in_channels=3, hidden_dim=128)
 
 x = torch.randn(4, 3, 256, 256)
 spectral_features, aux_data = analyzer(x)
 
-# spectral_features: [4, 256]
-# aux_data: {'freq_features': Tensor}
+# spectral_features: [4, 128]
+# aux_data: {
+#     'magnitude': Tensor,      # FFT magnitude features
+#     'phase': Tensor,          # Phase features  
+#     'radial_spectrum': Tensor # Radial power spectrum
+# }
 ```
 
 ---
 
-### StatisticalEstimator
+### StatisticalMomentEstimator
 
-Статистический анализатор со сравнением с прототипами.
+Статистический анализатор со сравнением с обучаемыми прототипами реальных изображений.
 
 **Расположение:** [tigas/models/feature_extractors.py](../tigas/models/feature_extractors.py)
 
 ```python
-class StatisticalEstimator(nn.Module):
+class StatisticalMomentEstimator(nn.Module):
     """
-    Статистический оценщик:
+    Статистический оценщик с EMA-прототипами:
     - Моменты распределения (mean, var, skewness, kurtosis)
-    - Learnable prototypes для real/fake классов
-    - Сравнение с прототипами
+    - Learnable prototypes для реальных изображений
+    - Сравнение с прототипами: diff, interaction, cosine similarity
+    - EMA обновление прототипов во время обучения
     """
 ```
+
+#### Идея
+
+Натуральные изображения имеют характерные статистические свойства. Модель:
+1. Вычисляет статистические моменты входного изображения
+2. Сравнивает их с **прототипами** (усреднённой статистикой реальных изображений)
+3. Анализирует **различия** для определения подлинности
 
 #### Архитектура
 
@@ -196,7 +233,65 @@ Input [B, 3, H, W]
 │  └─ Kurtosis (4th moment)              │
 └────────────────┬────────────────────────┘
                  │
-                 ▼
+                 ▼ stats [B, stat_dim]
+┌─────────────────────────────────────────┐
+│  Prototype Comparison                   │
+│  ├─ diff = stats - prototype            │
+│  ├─ interaction = stats * prototype     │
+│  └─ cosine_sim = cosine(stats, proto)   │
+└────────────────┬────────────────────────┘
+                 │
+                 ▼ [stats, diff, interaction, cosine]
+┌─────────────────────────────────────────┐
+│  Comparison Network (MLP)               │
+│  → [B, feature_dim]                     │
+└─────────────────────────────────────────┘
+```
+
+#### EMA обновление прототипов
+
+```python
+# Во время обучения (с реальными изображениями):
+if update_prototypes and training:
+    momentum = 0.99
+    prototype = momentum * prototype + (1 - momentum) * real_stats.mean(0)
+```
+
+#### Параметры
+
+| Параметр | Default | Описание |
+|----------|---------|----------|
+| `feature_dim` | 256 | Выходная размерность |
+| `stat_dim` | 12 | Размерность статистики (4 момента × 3 канала) |
+| `prototype_momentum` | 0.99 | Momentum для EMA обновления |
+
+#### Использование
+
+```python
+from tigas.models.feature_extractors import StatisticalMomentEstimator
+
+estimator = StatisticalMomentEstimator(feature_dim=256)
+
+x = torch.randn(4, 3, 256, 256)
+# update_prototypes=True только для реальных изображений во время обучения
+stat_features, aux_data = estimator(x, update_prototypes=True)
+
+# stat_features: [4, 256]
+# aux_data: {
+#     'statistics': Tensor,      # Raw statistics
+#     'prototype': Tensor,        # Current prototype
+#     'prototype_distance': Tensor  # Distance to prototype
+# }
+```
+
+---
+
+### Детали реализации StatisticalMomentEstimator
+
+```
+Input [B, 3, H, W]
+       │
+       ▼
 ┌─────────────────────────────────────────┐
 │  Prototype Comparison                   │
 │  ├─ Real prototype (learnable)          │

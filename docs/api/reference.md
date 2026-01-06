@@ -91,9 +91,17 @@ class TIGASModel(nn.Module):
         self,
         x: torch.Tensor,
         return_features: bool = False,
-        update_prototypes: bool = False
+        update_prototypes: bool = False,
+        labels: torch.Tensor = None
     ) -> Dict[str, torch.Tensor]:
         """
+        Args:
+            x: Input images [B, C, H, W]
+            return_features: Whether to return intermediate features
+            update_prototypes: Whether to update statistical prototypes
+            labels: Optional labels [B, 1] for selective prototype update
+                    (only updates from real images when provided)
+        
         Returns:
             {
                 'score': Tensor[B, 1],   # [0, 1]
@@ -147,12 +155,18 @@ class MultiScaleFeatureExtractor(nn.Module):
 ```python
 class SpectralAnalyzer(nn.Module):
     """
-    Анализ частотной области через FFT.
-    Детектирует артефакты GAN (checkerboard patterns, etc.)
+    Комплексный анализ частотной области через FFT.
+    Детектирует артефакты GAN:
+    - Магнитуда FFT (CNN encoder)
+    - Фаза FFT (CNN encoder)
+    - Радиальный спектр мощности (1/f decay анализ)
+    - Азимутальная статистика (8 угловых секторов)
     
     Args:
-        in_channels: Входные каналы
-        hidden_dim: Размерность скрытого слоя
+        in_channels: Входные каналы (default: 3)
+        hidden_dim: Размерность скрытого слоя (default: 128)
+        num_radial_bins: Количество радиальных бинов (default: 32)
+        num_azimuthal_bins: Количество угловых секторов (default: 8)
     """
     
     def forward(
@@ -161,7 +175,11 @@ class SpectralAnalyzer(nn.Module):
         """
         Returns:
             output: Tensor[B, hidden_dim]
-            aux: {'freq_features': Tensor}
+            aux: {
+                'magnitude': Tensor,       # Magnitude features
+                'phase': Tensor,           # Phase features
+                'radial_spectrum': Tensor  # Radial power spectrum
+            }
         """
 ```
 
@@ -171,7 +189,12 @@ class SpectralAnalyzer(nn.Module):
 class StatisticalMomentEstimator(nn.Module):
     """
     Оценка статистической согласованности с естественными изображениями.
-    Использует learnable prototypes.
+    Использует EMA-обновляемые prototypes для сравнения.
+    
+    Сравнение с прототипами включает:
+    - diff: stats - prototype
+    - interaction: stats * prototype  
+    - cosine_similarity
     
     Args:
         in_channels: Входные каналы
@@ -181,12 +204,26 @@ class StatisticalMomentEstimator(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        update_prototypes: bool = False
+        update_prototypes: bool = False,
+        labels: torch.Tensor = None
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
+        Args:
+            x: Input image [B, C, H, W]
+            update_prototypes: Обновлять prototypes (только при training)
+            labels: Optional labels [B, 1] - если предоставлены, обновляет
+                    prototypes только на основе REAL images (label=1.0)
+            
         Returns:
             output: Tensor[B, feature_dim]
-            aux: {'statistics': Tensor, 'prototypes': Tensor}
+            aux: {
+                'statistics': Tensor,         # Raw statistics
+                'prototypes': Tensor,         # Current prototypes
+                'diff_from_prototypes': Tensor,
+                'l2_distance': Tensor,
+                'cosine_similarity': Tensor,
+                'prototype_update_count': int
+            }
         """
 ```
 
@@ -306,6 +343,11 @@ class TIGASLoss(nn.Module):
         ranking_weight: Вес MarginRanking (default: 0.3)
         use_smooth_l1: Использовать SmoothL1 вместо MSE
         margin: Margin для ranking loss
+        max_ranking_pairs: Максимум случайных пар для ranking (default: 64)
+    
+    Notes:
+        - Ranking loss использует случайное семплирование пар, а не детерминированное
+        - Fail-fast при NaN/Inf - RuntimeError вместо маскирования
     """
     
     def forward(
@@ -381,11 +423,17 @@ class TIGASDataset(Dataset):
     """
     Датасет со структурой root/{real,fake}/*.
     
+    Features:
+    - Автоматическая обработка повреждённых изображений (fallback на чёрное)
+    - Кэширование тензоров (не PIL) для эффективности
+    - Опциональная валидация при инициализации
+    
     Args:
         root: Путь к корню датасета
         transform: Трансформации изображений
         split: 'train', 'val', 'test'
-        use_cache: Кэшировать изображения в памяти
+        use_cache: Кэшировать тензоры в памяти
+        validate_images: Проверить все изображения при init
     """
 
 
@@ -396,21 +444,37 @@ class CSVDataset(Dataset):
     CSV формат: image_path,label
     label: 1 = real, 0 = fake
     
+    Features:
+    - Автоматическая обработка повреждённых файлов
+    - Cross-platform пути (Windows/Linux)
+    
     Args:
         csv_file: Путь к CSV (относительный или абсолютный)
         root_dir: Корневая директория для путей в CSV
         transform: Трансформации
-        use_cache: Кэширование
+        use_cache: Кэширование тензоров
         validate_paths: Проверять существование файлов
     """
 
 
 class RealFakeDataset(Dataset):
-    """Датасет с явными списками real/fake изображений."""
+    """
+    Датасет с явными списками real/fake изображений.
+    
+    Args:
+        real_images: Список путей к real
+        fake_images: Список путей к fake
+        transform: Трансформации
+        balance: Балансировать классы
+        balance_method: 'oversample' или 'undersample'
+    """
 
 
 class PairedDataset(Dataset):
-    """Датасет для парного обучения (real, fake) пар."""
+    """
+    Датасет для парного обучения (real, fake) пар.
+    Возвращает случайные пары на каждой эпохе.
+    """
 ```
 
 ### DataLoader функции
@@ -425,10 +489,14 @@ def create_dataloaders(
     val_split: float = 0.1,
     augment_level: str = 'medium',
     pin_memory: bool = True,
-    shuffle: bool = True
+    shuffle: bool = True,
+    stratified: bool = True  # NEW: сохраняет баланс классов
 ) -> Dict[str, DataLoader]:
     """
     Создание train/val/test loaders из структуры real/fake.
+    
+    Notes:
+    - stratified=True (default) сохраняет пропорции real/fake в каждом сплите
     
     Returns:
         {'train': DataLoader, 'val': DataLoader, 'test': DataLoader}

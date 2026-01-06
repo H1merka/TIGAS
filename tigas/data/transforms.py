@@ -24,11 +24,18 @@ class RandomJPEGCompression:
         # This requires PIL Image
         if hasattr(img, 'save'):
             import io
-            buffer = io.BytesIO()
-            img.save(buffer, format='JPEG', quality=quality)
-            buffer.seek(0)
             from PIL import Image
-            return Image.open(buffer)
+            buffer = io.BytesIO()
+            try:
+                img.save(buffer, format='JPEG', quality=quality)
+                buffer.seek(0)
+                # Load and copy to detach from buffer before closing
+                compressed = Image.open(buffer)
+                result = compressed.copy()  # Copy detaches image from buffer
+                compressed.close()
+                return result
+            finally:
+                buffer.close()
         return img
 
 
@@ -99,7 +106,7 @@ class ColorJitter:
 
 def get_train_transforms(
     img_size: int = 256,
-    normalize: bool = True,
+    normalize: bool = True,  # Kept for API compatibility, but ignored (model normalizes)
     augment_level: str = 'medium'
 ) -> T.Compose:
     """
@@ -137,31 +144,30 @@ def get_train_transforms(
     if augment_level == 'heavy':
         transforms_list.append(T.RandomRotation(10))
 
-    # Convert to tensor
+    # Convert to tensor (outputs [0, 1] range)
     transforms_list.append(T.ToTensor())
 
     # Skip heavy tensor augmentations for speed
     # (RandomGaussianNoise and RandomGaussianBlur removed)
     # These can be added back if GPU memory allows
 
-    # Normalization
-    if normalize:
-        # Normalize to [-1, 1]
-        transforms_list.append(T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
+    # NOTE: Normalization to [-1, 1] is handled by TIGASModel._normalize_input()
+    # Do NOT add T.Normalize here to avoid double normalization!
+    # The model expects input in [0, 1] range and normalizes internally.
 
     return T.Compose(transforms_list)
 
 
 def get_val_transforms(
     img_size: int = 256,
-    normalize: bool = True
+    normalize: bool = True  # Kept for API compatibility, but ignored (model normalizes)
 ) -> T.Compose:
     """
     Get validation/test transforms.
 
     Args:
         img_size: Target image size
-        normalize: Whether to normalize to [-1, 1]
+        normalize: Ignored - model handles normalization internally
 
     Returns:
         transforms: Composed transforms
@@ -172,22 +178,22 @@ def get_val_transforms(
         T.ToTensor(),
     ]
 
-    if normalize:
-        transforms_list.append(T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
+    # NOTE: Normalization to [-1, 1] is handled by TIGASModel._normalize_input()
+    # Do NOT add T.Normalize here to avoid double normalization!
 
     return T.Compose(transforms_list)
 
 
 def get_inference_transforms(
     img_size: int = 256,
-    normalize: bool = True
+    normalize: bool = True  # Kept for API compatibility, but ignored (model normalizes)
 ) -> T.Compose:
     """
     Get inference transforms (minimal processing).
 
     Args:
         img_size: Target image size
-        normalize: Whether to normalize
+        normalize: Ignored - model handles normalization internally
 
     Returns:
         transforms: Composed transforms
@@ -197,14 +203,23 @@ def get_inference_transforms(
         T.ToTensor(),
     ]
 
-    if normalize:
-        transforms_list.append(T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]))
+    # NOTE: Normalization to [-1, 1] is handled by TIGASModel._normalize_input()
+    # Do NOT add T.Normalize here to avoid double normalization!
 
     return T.Compose(transforms_list)
 
 
 class DenormalizeTransform:
-    """Denormalize images from [-1, 1] to [0, 1]."""
+    """
+    Denormalize images from [-1, 1] to [0, 1] for visualization.
+    
+    NOTE: This is intended for denormalizing MODEL OUTPUTS after internal
+    normalization, NOT for dataset preprocessing. The model internally
+    normalizes inputs to [-1, 1] via TIGASModel._normalize_input().
+    
+    Use this transform when you need to visualize or save images that have
+    been processed by the model.
+    """
 
     def __call__(self, tensor):
         return tensor * 0.5 + 0.5

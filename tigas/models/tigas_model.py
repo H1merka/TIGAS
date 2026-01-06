@@ -153,17 +153,25 @@ class TIGASModel(nn.Module):
 
     def _normalize_input(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Нормализовать входной тензор в диапазон [-1, 1].
+        Normalize input tensor to range [-1, 1].
         
-        Поддерживает входы в диапазонах:
-        - [0, 1]: преобразуется в [-1, 1]
-        - [-1, 1]: остаётся без изменений
-        - Другие: clamp в [-1, 1]
+        IMPORTANT: This method assumes input is ALWAYS in [0, 1] range.
+        The InputProcessor and data transforms should ensure this.
+        
+        This is a deterministic O(1) operation - no conditional logic
+        based on tensor values to ensure consistent behavior.
+        
+        Args:
+            x: Input tensor in [0, 1] range
+            
+        Returns:
+            Normalized tensor in [-1, 1] range
         """
-        # Если вход в диапазоне [0, 1], преобразуем в [-1, 1]
-        if x.min() >= 0 and x.max() <= 1:
-            x = x * 2 - 1
-        # Clamp для гарантии корректного диапазона
+        # Always transform [0, 1] -> [-1, 1]
+        # This is O(1) - just a linear transform, no data-dependent branching
+        x = x * 2.0 - 1.0
+        
+        # Clamp to ensure valid range (handles edge cases from augmentation)
         x = torch.clamp(x, INPUT_MIN, INPUT_MAX)
         return x
 
@@ -225,10 +233,19 @@ class TIGASModel(nn.Module):
         self,
         x: torch.Tensor,
         return_features: bool = False,
-        update_prototypes: bool = False
+        update_prototypes: bool = False,
+        labels: torch.Tensor = None
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with fast_mode optimization.
+        
+        Args:
+            x: Input images [B, C, H, W]
+            return_features: Whether to return intermediate features
+            update_prototypes: Whether to update statistical prototypes
+                (training only)
+            labels: Optional labels [B, 1] for selective prototype
+                update from real images only
         """
         # Normalize input
         x = self._normalize_input(x)
@@ -238,7 +255,9 @@ class TIGASModel(nn.Module):
             return self._forward_fast(x, return_features)
         else:
             # FULL PATH: All branches + cross-modal attention
-            return self._forward_full(x, return_features, update_prototypes)
+            return self._forward_full(
+                x, return_features, update_prototypes, labels
+            )
 
     def _forward_fast(
         self,
@@ -287,11 +306,12 @@ class TIGASModel(nn.Module):
         self,
         x: torch.Tensor,
         return_features: bool = False,
-        update_prototypes: bool = False
+        update_prototypes: bool = False,
+        labels: torch.Tensor = None
     ) -> Dict[str, torch.Tensor]:
         """Full forward pass with all branches and attention."""
         # Extract features from all branches
-        features = self._extract_features(x, update_prototypes)
+        features = self._extract_features(x, update_prototypes, labels)
 
         # Apply cross-modal attention
         attended_features = self._apply_cross_modal_attention(features)
@@ -309,7 +329,8 @@ class TIGASModel(nn.Module):
     def _extract_features(
         self,
         x: torch.Tensor,
-        update_prototypes: bool
+        update_prototypes: bool,
+        labels: torch.Tensor = None
     ) -> Dict[str, torch.Tensor]:
         """Извлечь признаки из всех ветвей."""
         # 1. Multi-scale perceptual features
@@ -327,7 +348,7 @@ class TIGASModel(nn.Module):
 
         # 3. Statistical features
         statistical_feat, stat_aux = self.statistical_estimator(
-            x, update_prototypes=update_prototypes
+            x, update_prototypes=update_prototypes, labels=labels
         )
 
         return {

@@ -14,27 +14,49 @@ Total Loss = w₁ × L_regression + w₂ × L_classification + w₃ × L_ranking
 
 ## CombinedLoss
 
-Основной класс комбинированной потери.
+Основной класс комбинированной потери. Оборачивает `TIGASLoss` и добавляет опциональные компоненты.
 
 ```python
 from tigas.training.losses import CombinedLoss
 
 loss_fn = CombinedLoss(
-    regression_weight=1.0,
-    classification_weight=0.3,
-    ranking_weight=0.2,
-    regression_type='mse'  # или 'smoothl1'
+    use_tigas_loss=True,
+    use_contrastive=False,
+    use_regularization=True,
+    tigas_loss_config={
+        'regression_weight': 1.0,
+        'classification_weight': 0.5,  # default в TIGASLoss
+        'ranking_weight': 0.3,         # default в TIGASLoss
+        'use_smooth_l1': True,
+        'max_ranking_pairs': 64
+    },
+    reg_weight=1e-4,
+    contrastive_weight=0.1
 )
 ```
 
-### Параметры
+### Параметры CombinedLoss
+
+| Параметр | Default | Описание |
+|----------|---------|----------|
+| `use_tigas_loss` | True | Использовать основной TIGASLoss |
+| `use_contrastive` | False | Добавить contrastive loss |
+| `use_regularization` | True | Добавить L2 регуляризацию |
+| `tigas_loss_config` | None | Конфигурация для TIGASLoss (dict) |
+| `contrastive_config` | None | Конфигурация для ContrastiveLoss |
+| `reg_weight` | 1e-4 | Вес L2 регуляризации |
+| `contrastive_weight` | 0.1 | Вес contrastive loss |
+
+### Параметры TIGASLoss (внутренний)
 
 | Параметр | Default | Описание |
 |----------|---------|----------|
 | `regression_weight` | 1.0 | Вес регрессионной потери |
-| `classification_weight` | 0.3 | Вес классификационной потери |
-| `ranking_weight` | 0.2 | Вес ranking потери |
-| `regression_type` | 'mse' | Тип регрессии: `'mse'` или `'smoothl1'` |
+| `classification_weight` | 0.5 | Вес классификационной потери |
+| `ranking_weight` | 0.3 | Вес ranking потери |
+| `use_smooth_l1` | True | Smooth L1 (True) или MSE (False) |
+| `margin` | 0.5 | Margin для ranking loss |
+| `max_ranking_pairs` | 64 | Максимум пар для ranking loss |
 
 ---
 
@@ -76,11 +98,15 @@ L = (1/N) × Σ smooth_l1(score_i - label_i)
 #### Использование
 
 ```python
-# MSE (default)
-loss_fn = CombinedLoss(regression_type='mse')
+# MSE (default: use_smooth_l1=True в TIGASLoss)
+loss_fn = CombinedLoss(
+    tigas_loss_config={'use_smooth_l1': False}  # MSE
+)
 
-# SmoothL1
-loss_fn = CombinedLoss(regression_type='smoothl1')
+# SmoothL1 (default)
+loss_fn = CombinedLoss(
+    tigas_loss_config={'use_smooth_l1': True}   # SmoothL1
+)
 ```
 
 ---
@@ -115,7 +141,7 @@ binary_labels = (labels > 0.5).long()
 
 ### 3. Ranking Loss
 
-Margin Ranking Loss обеспечивает правильное упорядочивание score'ов.
+Margin Ranking Loss с **случайным семплированием пар** обеспечивает правильное упорядочивание score'ов.
 
 ```python
 L_ranking = MarginRankingLoss(score_real, score_fake, y=+1, margin=0.5)
@@ -129,7 +155,7 @@ L = max(0, margin - (score_real - score_fake))
 Цель: score_real > score_fake + margin
 ```
 
-#### Логика формирования пар
+#### Логика формирования пар (Random Sampling)
 
 ```python
 # Разделение батча на real и fake
@@ -139,13 +165,22 @@ fake_mask = labels <= 0.5
 real_scores = scores[real_mask]
 fake_scores = scores[fake_mask]
 
-# Создание пар (все комбинации real × fake)
-for score_r in real_scores:
-    for score_f in fake_scores:
-        loss += max(0, margin - (score_r - score_f))
+# Случайное семплирование пар (вместо детерминированного)
+num_pairs = min(max_ranking_pairs, n_real, n_fake)
+real_indices = torch.randint(0, n_real, (num_pairs,))
+fake_indices = torch.randint(0, n_fake, (num_pairs,))
+
+real_sample = real_scores[real_indices]
+fake_sample = fake_scores[fake_indices]
+
+# MarginRankingLoss
+loss = F.margin_ranking_loss(real_sample, fake_sample, target=1, margin=0.5)
 ```
 
-**Важно:** Ranking loss вычисляется только если в батче есть оба класса.
+**Важно:** 
+- Ranking loss вычисляется только если в батче есть оба класса
+- Используется **случайное семплирование** пар для избежания bias к определённым сэмплам
+- Параметр `max_ranking_pairs` (default: 64) ограничивает вычислительную сложность
 
 ---
 
@@ -155,16 +190,20 @@ for score_r in real_scores:
 
 | Сценарий | Regression | Classification | Ranking |
 |----------|------------|----------------|---------|
-| Default | 1.0 | 0.3 | 0.2 |
+| Default (TIGASLoss) | 1.0 | 0.5 | 0.3 |
+| train_script.py | 1.0 | 0.3 | 0.2 |
 | Акцент на score | 1.5 | 0.2 | 0.1 |
 | Акцент на классификацию | 0.5 | 1.0 | 0.2 |
 | Максимальное разделение | 1.0 | 0.3 | 0.5 |
 
+> **Примечание:** `train_script.py` использует более консервативные веса (0.3, 0.2) для стабильности.
+> `TIGASLoss` по умолчанию использует (0.5, 0.3).
+
 ### Обоснование default весов
 
 1. **Regression (1.0)** - основная задача, наивысший приоритет
-2. **Classification (0.3)** - вспомогательная задача, помогает изучить дискриминативные признаки
-3. **Ranking (0.2)** - регуляризатор, обеспечивает правильный порядок
+2. **Classification (0.3-0.5)** - вспомогательная задача, помогает изучить дискриминативные признаки
+3. **Ranking (0.2-0.3)** - регуляризатор, обеспечивает правильный порядок
 
 ---
 
@@ -204,35 +243,40 @@ def forward(self, scores, logits, labels):
 ### Стандартный forward
 
 ```python
-outputs = model(images)
+outputs = model(images, labels=labels, update_prototypes=True)
 # outputs['score']: [B, 1] - предсказанный score
 # outputs['logits']: [B, 2] - logits для классификации
 
-total_loss, loss_dict = loss_fn(
-    scores=outputs['score'].squeeze(-1),  # [B]
-    logits=outputs['logits'],              # [B, 2]
-    labels=labels                          # [B]
-)
+losses = loss_fn(outputs, labels, model)
 
-# loss_dict содержит:
+# losses содержит:
 # - 'regression': значение регрессионной потери
 # - 'classification': значение классификационной потери
 # - 'ranking': значение ranking потери (или 0 если невозможно)
-# - 'total': итоговая потеря
+# - 'total': итоговая потеря от TIGASLoss
+# - 'combined_total': общая потеря включая L2 regularization
+# - 'l2_regularization': L2 регуляризация (если model передан)
 ```
 
 ### С TIGASTrainer
 
 ```python
 from tigas.training import TIGASTrainer
+from tigas.training.losses import CombinedLoss
+
+loss_fn = CombinedLoss(
+    tigas_loss_config={
+        'regression_weight': 1.0,
+        'classification_weight': 0.3,
+        'ranking_weight': 0.2
+    }
+)
 
 trainer = TIGASTrainer(
     model=model,
     train_loader=train_loader,
     val_loader=val_loader,
-    regression_weight=1.0,
-    classification_weight=0.3,
-    ranking_weight=0.2
+    loss_fn=loss_fn
 )
 
 trainer.train(num_epochs=50)

@@ -85,12 +85,18 @@ class TIGAS(nn.Module):
                 print("         For better results, download a pretrained model or train one.")
         
         # Create or load model
+        # Note: We create model first without loading, then load weights separately
+        # This avoids double initialization when pretrained=True also initializes weights
         if checkpoint_path and Path(checkpoint_path).exists():
-            self.model = create_tigas_model(
-                img_size=img_size,
-                pretrained=True,
-                checkpoint_path=checkpoint_path
-            )
+            # First create model architecture (pretrained=False)
+            self.model = create_tigas_model(img_size=img_size, pretrained=False)
+            
+            # Then load weights directly - avoids creating model twice
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+            try:
+                self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            except Exception as e:
+                print(f"Warning: Partial weight loading due to architecture change: {e}")
             print(f"Loaded TIGAS model from {checkpoint_path}")
         else:
             self.model = create_tigas_model(img_size=img_size)

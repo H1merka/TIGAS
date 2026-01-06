@@ -291,6 +291,59 @@ transform = TIGASTransform(img_size=256)
 dataset = TIGASDataset('data/', transform=transform)
 ```
 
+### Повреждённые изображения
+
+**Поведение:** При обнаружении повреждённого изображения датасет автоматически возвращает чёрное изображение (fallback) и выводит предупреждение.
+
+```python
+# Пример warning при загрузке повреждённого файла:
+# Warning: Failed to load image path/to/corrupted.jpg: cannot identify image file
+```
+
+**Рекомендации:**
+1. **Валидация перед обучением:**
+   ```bash
+   python scripts/validate_dataset.py \
+       --dataset_dir ./data \
+       --remove_corrupted \
+       --update_csv
+   ```
+
+2. **Проверка в runtime:**
+   ```python
+   dataset = TIGASDataset('data/', validate_images=True)
+   # validate_images=True проверит все изображения при инициализации
+   ```
+
+### Несбалансированный датасет
+
+**Диагностика:**
+```python
+from tigas.data.loaders import create_dataloaders
+
+loaders = create_dataloaders(
+    'data/',
+    stratified=True  # По умолчанию True - сохраняет баланс
+)
+```
+
+**Решения:**
+
+1. **Стратифицированное разбиение** (по умолчанию):
+   - Автоматически сохраняет пропорции real/fake в train/val/test
+
+2. **Балансировка датасета:**
+   ```python
+   from tigas.data.dataset import RealFakeDataset
+   
+   dataset = RealFakeDataset(
+       real_images=real_paths,
+       fake_images=fake_paths,
+       balance=True,
+       balance_method='oversample'  # Или 'undersample'
+   )
+   ```
+
 ### `Некорректные метки`
 
 **Проверка:**

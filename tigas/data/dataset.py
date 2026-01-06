@@ -6,9 +6,10 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 from PIL import Image
-from typing import Optional, Callable, Tuple, List
+from typing import Optional, Callable, Tuple, List, Union
 import json
 import random
+import warnings
 
 
 class TIGASDataset(Dataset):
@@ -33,72 +34,148 @@ class TIGASDataset(Dataset):
         root: str,
         transform: Optional[Callable] = None,
         split: str = 'train',
-        use_cache: bool = False
+        use_cache: bool = False,
+        validate_images: bool = False
     ):
         """
         Args:
             root: Root directory containing 'real' and 'fake' subdirectories
             transform: Image transformations
             split: 'train', 'val', or 'test'
-            use_cache: Whether to cache images in memory
+            use_cache: Whether to cache raw PIL images in memory (before transforms)
+            validate_images: Whether to validate all images on initialization
         """
         self.root = Path(root)
         self.transform = transform
         self.split = split
         self.use_cache = use_cache
+        
+        # Cache stores RAW PIL images (not transformed tensors)
+        # This is more memory efficient and allows different augmentations
+        # to be applied on each access while still avoiding disk I/O
+        self.cache = {} if use_cache else None
 
         # Find all images
         self.samples = []
-        self.cache = {} if use_cache else None
+        self._corrupted_images = []
 
         # Real images (label = 1.0)
         real_dir = self.root / 'real'
         if real_dir.exists():
             for img_path in real_dir.glob('**/*'):
                 if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
-                    label = 1.0
-                    self.samples.append((str(img_path), label))
+                    self.samples.append((str(img_path), 1.0))
 
         # Fake images (label = 0.0)
         fake_dir = self.root / 'fake'
         if fake_dir.exists():
             for img_path in fake_dir.glob('**/*'):
                 if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
-                    label = 0.0
-                    self.samples.append((str(img_path), label))
+                    self.samples.append((str(img_path), 0.0))
 
         if len(self.samples) == 0:
             raise ValueError(f"No images found in {self.root}")
 
-        print(f"Loaded {len(self.samples)} images for {split}")
+        # Optional validation of all images
+        if validate_images:
+            self._validate_images()
+
+        # Count classes
+        real_count = sum(1 for _, label in self.samples if label == 1.0)
+        fake_count = len(self.samples) - real_count
+        
+        print(f"Loaded {len(self.samples)} images for {split} ({real_count} real, {fake_count} fake)")
+
+    def _validate_images(self):
+        """Validate all images and remove corrupted ones."""
+        valid_samples = []
+        for img_path, label in self.samples:
+            try:
+                with Image.open(img_path) as img:
+                    img.verify()  # Verify image integrity
+                valid_samples.append((img_path, label))
+            except Exception as e:
+                self._corrupted_images.append((img_path, str(e)))
+                warnings.warn(f"Corrupted image removed: {img_path} - {e}")
+        
+        if self._corrupted_images:
+            print(f"Removed {len(self._corrupted_images)} corrupted images")
+        
+        self.samples = valid_samples
 
     def __len__(self) -> int:
         return len(self.samples)
 
+    def _load_image(self, img_path: str) -> Optional[Image.Image]:
+        """
+        Safely load an image with error handling.
+        
+        Args:
+            img_path: Path to image file
+            
+        Returns:
+            PIL Image or None if loading fails
+        """
+        try:
+            img = Image.open(img_path).convert('RGB')
+            return img
+        except Exception as e:
+            warnings.warn(f"Failed to load image {img_path}: {e}")
+            return None
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         img_path, label = self.samples[idx]
 
-        # Load from cache if available
+        # Check cache first (stores raw PIL images)
         if self.use_cache and img_path in self.cache:
             img = self.cache[img_path]
         else:
-            img = Image.open(img_path).convert('RGB')
+            # Load image with error handling
+            img = self._load_image(img_path)
+            
+            if img is None:
+                # Raise error for corrupted images - don't silently use black fallback
+                # Black images contaminate training data and can cause model collapse.
+                # Use validate_dataset.py to identify and remove corrupted images.
+                raise RuntimeError(
+                    f"Failed to load image: {img_path}\n"
+                    f"Run 'python scripts/validate_dataset.py --data_root <dataset>' "
+                    f"to identify and fix corrupted images."
+                )
+            
+            # Cache the raw PIL image (not transformed tensor)
+            # This saves disk I/O while still allowing augmentation
             if self.use_cache:
-                self.cache[img_path] = img
+                self.cache[img_path] = img.copy()  # Copy to avoid mutation issues
 
-        # Apply transforms
+        # Apply transforms (different each time for augmentation)
         if self.transform is not None:
-            img = self.transform(img)
+            img_tensor = self.transform(img)
+        else:
+            img_tensor = img
 
-        label = torch.tensor([label], dtype=torch.float32)
+        label_tensor = torch.tensor([label], dtype=torch.float32)
 
-        return img, label
+        return img_tensor, label_tensor
+    
+    def clear_cache(self):
+        """Clear the PIL image cache to free memory."""
+        if self.cache is not None:
+            self.cache.clear()
+
+    def get_class_counts(self) -> Tuple[int, int]:
+        """Get counts of real and fake images."""
+        real_count = sum(1 for _, label in self.samples if label == 1.0)
+        fake_count = len(self.samples) - real_count
+        return real_count, fake_count
 
 
 class RealFakeDataset(Dataset):
     """
     Dataset with explicit real/fake lists.
     More flexible than TIGASDataset.
+    
+    Note: balancing is done via sampling weights, not by discarding data.
     """
 
     def __init__(
@@ -106,7 +183,8 @@ class RealFakeDataset(Dataset):
         real_images: List[str],
         fake_images: List[str],
         transform: Optional[Callable] = None,
-        balance: bool = True
+        balance: bool = True,
+        balance_method: str = 'oversample'
     ):
         """
         Args:
@@ -114,23 +192,54 @@ class RealFakeDataset(Dataset):
             fake_images: List of paths to fake images
             transform: Image transformations
             balance: Whether to balance real/fake samples
+            balance_method: 'oversample' (repeat minority) or 'undersample' (limit majority)
         """
         self.transform = transform
+        self.balance = balance
+        self.balance_method = balance_method
 
-        # Create samples list
-        real_samples = [(path, 1.0) for path in real_images]
-        fake_samples = [(path, 0.0) for path in fake_images]
+        # Store original lists (never modify)
+        self._real_images = list(real_images)
+        self._fake_images = list(fake_images)
 
-        # Balance if requested
-        if balance:
-            min_len = min(len(real_samples), len(fake_samples))
-            real_samples = random.sample(real_samples, min_len)
-            fake_samples = random.sample(fake_samples, min_len)
+        # Create samples list with balancing
+        self._build_samples()
+
+        print(f"Dataset: {len(self._real_images)} real, {len(self._fake_images)} fake images")
+        print(f"After balancing: {len(self.samples)} total samples")
+
+    def _build_samples(self):
+        """Build the samples list with optional balancing."""
+        real_samples = [(path, 1.0) for path in self._real_images]
+        fake_samples = [(path, 0.0) for path in self._fake_images]
+
+        if self.balance:
+            n_real = len(real_samples)
+            n_fake = len(fake_samples)
+            
+            if self.balance_method == 'oversample':
+                # Oversample minority class (repeat samples)
+                if n_real < n_fake:
+                    # Oversample real
+                    multiplier = n_fake // n_real + 1
+                    real_samples = (real_samples * multiplier)[:n_fake]
+                elif n_fake < n_real:
+                    # Oversample fake
+                    multiplier = n_real // n_fake + 1
+                    fake_samples = (fake_samples * multiplier)[:n_real]
+            
+            elif self.balance_method == 'undersample':
+                # Undersample majority class (random selection, but deterministic)
+                random.seed(42)  # Reproducible
+                min_len = min(n_real, n_fake)
+                if n_real > min_len:
+                    real_samples = random.sample(real_samples, min_len)
+                if n_fake > min_len:
+                    fake_samples = random.sample(fake_samples, min_len)
 
         self.samples = real_samples + fake_samples
+        random.seed(42)
         random.shuffle(self.samples)
-
-        print(f"Dataset: {len(real_samples)} real, {len(fake_samples)} fake images")
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -138,7 +247,11 @@ class RealFakeDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         img_path, label = self.samples[idx]
 
-        img = Image.open(img_path).convert('RGB')
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            warnings.warn(f"Failed to load {img_path}: {e}, using black image")
+            img = Image.new('RGB', (256, 256), (0, 0, 0))
 
         if self.transform is not None:
             img = self.transform(img)
@@ -198,13 +311,21 @@ class PairedDataset(Dataset):
     def __len__(self) -> int:
         return self.pairs_per_epoch
 
+    def _safe_load_image(self, path: str) -> Image.Image:
+        """Safely load an image with fallback to black image."""
+        try:
+            return Image.open(path).convert('RGB')
+        except Exception as e:
+            warnings.warn(f"Failed to load {path}: {e}, using black image")
+            return Image.new('RGB', (256, 256), (0, 0, 0))
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # Randomly sample one real and one fake image
         real_path = random.choice(self.real_images)
         fake_path = random.choice(self.fake_images)
 
-        real_img = Image.open(real_path).convert('RGB')
-        fake_img = Image.open(fake_path).convert('RGB')
+        real_img = self._safe_load_image(real_path)
+        fake_img = self._safe_load_image(fake_path)
 
         if self.transform is not None:
             real_img = self.transform(real_img)
@@ -275,7 +396,11 @@ class MultiSourceDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, str]:
         img_path, label, source = self.samples[idx]
 
-        img = Image.open(img_path).convert('RGB')
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            warnings.warn(f"Failed to load {img_path}: {e}, using black image")
+            img = Image.new('RGB', (256, 256), (0, 0, 0))
 
         if self.transform is not None:
             img = self.transform(img)
@@ -326,7 +451,14 @@ class MetadataDataset(Dataset):
         img_path = sample['image_path']
         label = sample['label']
 
-        img = Image.open(img_path).convert('RGB')
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            # Log warning and return black image as fallback
+            import warnings
+            warnings.warn(f"Failed to load image {img_path}: {e}. Using black image fallback.")
+            # Create black image with default size (will be transformed)
+            img = Image.new('RGB', (256, 256), (0, 0, 0))
 
         if self.transform is not None:
             img = self.transform(img)
@@ -514,7 +646,15 @@ class CSVDataset(Dataset):
             # Note: skip_corrupted parameter kept for backward compatibility
             # but graceful error handling is disabled for performance.
             # Use cleaned CSV from validate_dataset.py to ensure data integrity.
-            img = Image.open(img_path).convert('RGB')
+            try:
+                img = Image.open(img_path).convert('RGB')
+            except Exception as e:
+                # Log warning and return black image as fallback
+                import warnings
+                warnings.warn(f"Failed to load image {img_path}: {e}. Using black image fallback.")
+                # Create black image with default size (will be transformed)
+                img = Image.new('RGB', (256, 256), (0, 0, 0))
+            
             if self.use_cache:
                 self.cache[img_path] = img
 

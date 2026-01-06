@@ -26,8 +26,8 @@ python scripts/train_script.py --data_root ./dataset --fast_mode
 |----------------|----------|
 | Ветви | Perceptual + Aux branch |
 | Параметры | ~2.5M |
-| Память GPU | ~4 GB (batch=16) |
-| Скорость | Быстро |
+| Память GPU | ~3-4 GB (batch=16) |
+| Скорость | Быстро (~8-10 it/s) |
 | Применение | Обучение, прототипирование |
 
 ### Full Mode
@@ -40,9 +40,9 @@ python scripts/train_script.py --data_root ./dataset --full_mode
 |----------------|----------|
 | Ветви | Perceptual + Spectral + Statistical |
 | Attention | Cross-modal + Self-attention |
-| Параметры | ~5M |
-| Память GPU | ~8 GB (batch=16) |
-| Скорость | Медленнее |
+| Параметры | ~18.6M |
+| Память GPU | ~6-8 GB (batch=8) |
+| Скорость | Медленнее (~1.5-2 it/s) |
 | Применение | Максимальная точность |
 
 ---
@@ -83,6 +83,16 @@ scheduler_config = {
 }
 ```
 
+#### Корректная обработка scheduler.step()
+
+Trainer автоматически определяет тип scheduler и вызывает `scheduler.step()` корректно:
+
+| Scheduler Type | Поведение |
+|----------------|-----------|
+| `OneCycleLR` | step() вызывается на каждом batch (не на epoch) |
+| `ReduceLROnPlateau` | step(val_loss) с fallback на train_loss |
+| `CosineAnnealingLR`, etc. | step() в конце каждой epoch |
+
 ---
 
 ## Loss функция
@@ -93,11 +103,11 @@ scheduler_config = {
 Total Loss = w₁ × Regression + w₂ × Classification + w₃ × Ranking
 ```
 
-| Компонент | Вес (default) | Назначение |
-|-----------|---------------|------------|
-| Regression | 1.0 | MSE между score и label |
-| Classification | 0.3 | CrossEntropy для real/fake |
-| Ranking | 0.2 | MarginRanking: real > fake |
+| Компонент | Вес (train_script.py) | Вес (TIGASLoss default) | Назначение |
+|-----------|----------------------|----------------------|------------|
+| Regression | 1.0 | 1.0 | MSE/SmoothL1 между score и label |
+| Classification | 0.3 | 0.5 | CrossEntropy для real/fake |
+| Ranking | 0.2 | 0.3 | MarginRanking: real > fake |
 
 ### Настройка весов
 

@@ -3,12 +3,79 @@ Data loaders for TIGAS training.
 """
 
 import torch
-from torch.utils.data import DataLoader, random_split
-from typing import Tuple, Optional, Dict
+from torch.utils.data import DataLoader, random_split, Subset
+from typing import Tuple, Optional, Dict, List
 from pathlib import Path
+import numpy as np
 
 from .dataset import TIGASDataset, RealFakeDataset, PairedDataset, CSVDataset
 from .transforms import get_train_transforms, get_val_transforms
+
+
+def stratified_split(
+    dataset: TIGASDataset,
+    train_ratio: float = 0.8,
+    val_ratio: float = 0.1,
+    seed: int = 42
+) -> Tuple[List[int], List[int], List[int]]:
+    """
+    Create stratified train/val/test split indices.
+    
+    Ensures each split has approximately the same ratio of real/fake images
+    as the full dataset.
+    
+    Args:
+        dataset: TIGASDataset with .samples attribute
+        train_ratio: Fraction for training
+        val_ratio: Fraction for validation
+        seed: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (train_indices, val_indices, test_indices)
+    """
+    # Use local RNG to avoid race conditions in multi-threaded environments
+    rng = np.random.default_rng(seed)
+    
+    # Separate indices by class
+    real_indices = []
+    fake_indices = []
+    
+    for idx, (path, label) in enumerate(dataset.samples):
+        if label == 1.0:
+            real_indices.append(idx)
+        else:
+            fake_indices.append(idx)
+    
+    # Shuffle within each class using local RNG
+    rng.shuffle(real_indices)
+    rng.shuffle(fake_indices)
+    
+    def split_indices(indices: List[int]) -> Tuple[List[int], List[int], List[int]]:
+        """Split a list of indices according to ratios."""
+        n = len(indices)
+        train_end = int(n * train_ratio)
+        val_end = int(n * (train_ratio + val_ratio))
+        
+        return (
+            indices[:train_end],
+            indices[train_end:val_end],
+            indices[val_end:]
+        )
+    
+    # Split each class
+    real_train, real_val, real_test = split_indices(real_indices)
+    fake_train, fake_val, fake_test = split_indices(fake_indices)
+    
+    # Combine and shuffle using local RNG
+    train_indices = real_train + fake_train
+    val_indices = real_val + fake_val
+    test_indices = real_test + fake_test
+    
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    rng.shuffle(test_indices)
+    
+    return train_indices, val_indices, test_indices
 
 
 def create_dataloaders(
@@ -20,10 +87,11 @@ def create_dataloaders(
     val_split: float = 0.1,
     augment_level: str = 'medium',
     pin_memory: bool = True,
-    shuffle: bool = True
+    shuffle: bool = True,
+    stratified: bool = True
 ) -> Dict[str, DataLoader]:
     """
-    Create train/val/test dataloaders.
+    Create train/val/test dataloaders with stratified splitting.
 
     Args:
         data_root: Root directory with real/fake subdirectories
@@ -35,27 +103,66 @@ def create_dataloaders(
         augment_level: Augmentation level ('light', 'medium', 'heavy')
         pin_memory: Whether to pin memory
         shuffle: Whether to shuffle training data
+        stratified: Whether to use stratified splitting (preserves class ratios)
 
     Returns:
         Dictionary with 'train', 'val', 'test' dataloaders
     """
-    # Create full dataset
-    full_transform = get_train_transforms(img_size, augment_level=augment_level)
-    full_dataset = TIGASDataset(root=data_root, transform=full_transform)
+    # Create transforms
+    train_transform = get_train_transforms(img_size, augment_level=augment_level)
+    val_transform = get_val_transforms(img_size)
+    
+    # Create full dataset with training transforms (we'll override for val/test)
+    full_dataset = TIGASDataset(root=data_root, transform=train_transform)
 
-    # Calculate splits
-    total_size = len(full_dataset)
-    train_size = int(total_size * train_split)
-    val_size = int(total_size * val_split)
-    test_size = total_size - train_size - val_size
+    if stratified:
+        # Stratified split - preserves class balance
+        train_indices, val_indices, test_indices = stratified_split(
+            full_dataset,
+            train_ratio=train_split,
+            val_ratio=val_split,
+            seed=42
+        )
+        
+        # Create subsets
+        train_dataset = Subset(full_dataset, train_indices)
+        
+        # For val/test, create new dataset with val transforms
+        val_dataset_base = TIGASDataset(root=data_root, transform=val_transform)
+        val_dataset = Subset(val_dataset_base, val_indices)
+        test_dataset = Subset(val_dataset_base, test_indices)
+        
+        # Log class distribution
+        train_real = sum(1 for i in train_indices if full_dataset.samples[i][1] == 1.0)
+        val_real = sum(1 for i in val_indices if full_dataset.samples[i][1] == 1.0)
+        test_real = sum(1 for i in test_indices if full_dataset.samples[i][1] == 1.0)
+        
+        print(f"Stratified split statistics:")
+        print(f"  Train: {len(train_indices)} samples ({train_real} real, {len(train_indices)-train_real} fake)")
+        print(f"  Val: {len(val_indices)} samples ({val_real} real, {len(val_indices)-val_real} fake)")
+        print(f"  Test: {len(test_indices)} samples ({test_real} real, {len(test_indices)-test_real} fake)")
+    else:
+        # Random split (original behavior)
+        total_size = len(full_dataset)
+        train_size = int(total_size * train_split)
+        val_size = int(total_size * val_split)
+        test_size = total_size - train_size - val_size
 
-    # Split dataset
-    train_dataset, val_dataset, test_dataset = random_split(
-        full_dataset,
-        [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(42)
-    )
+        train_dataset, val_dataset, test_dataset = random_split(
+            full_dataset,
+            [train_size, val_size, test_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+        
+        print(f"Random split (non-stratified):")
+        print(f"  Train: {len(train_dataset)} samples")
+        print(f"  Val: {len(val_dataset)} samples")
+        print(f"  Test: {len(test_dataset)} samples")
 
+    # NOTE: persistent_workers can cause memory issues with caching datasets
+    # Only enable if num_workers > 0 and dataset doesn't use cache
+    use_persistent = num_workers > 0 and not getattr(full_dataset, 'use_cache', False)
+    
     # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
@@ -64,8 +171,8 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,
-        persistent_workers=True if num_workers > 0 else False,  # Keep workers alive
-        prefetch_factor=4 if num_workers > 0 else None  # Prefetch 4 batches per worker
+        persistent_workers=use_persistent,
+        prefetch_factor=4 if num_workers > 0 else None
     )
 
     val_loader = DataLoader(
@@ -74,7 +181,7 @@ def create_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=use_persistent,
         prefetch_factor=4 if num_workers > 0 else None
     )
 
@@ -84,14 +191,11 @@ def create_dataloaders(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=True if num_workers > 0 else False,
+        persistent_workers=use_persistent,
         prefetch_factor=4 if num_workers > 0 else None
     )
 
-    print(f"Created dataloaders:")
-    print(f"  Train: {len(train_dataset)} samples, {len(train_loader)} batches")
-    print(f"  Val: {len(val_dataset)} samples, {len(val_loader)} batches")
-    print(f"  Test: {len(test_dataset)} samples, {len(test_loader)} batches")
+    print(f"Created dataloaders with {len(train_loader)} train batches")
 
     return {
         'train': train_loader,

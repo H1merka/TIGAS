@@ -157,7 +157,8 @@ class TIGASTrainer:
                 outputs = self.model(
                     images,
                     return_features=False,
-                    update_prototypes=True
+                    update_prototypes=True,
+                    labels=labels  # Pass labels for selective prototype update from real images only
                 )
 
                 # Pre-loss diagnostic: check model outputs for NaN
@@ -218,6 +219,10 @@ class TIGASTrainer:
 
                 self.optimizer.zero_grad()
                 self.global_step += 1
+                
+                # Step OneCycleLR scheduler per batch (not per epoch)
+                if self.scheduler and isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                    self.scheduler.step()
 
             # Accumulate losses
             for key in epoch_losses.keys():
@@ -263,11 +268,12 @@ class TIGASTrainer:
             images = images.to(self.device)
             labels = labels.to(self.device)
 
-            # Forward pass
-            outputs = self.model(images, return_features=False)
+            # Forward pass with AMP for faster validation
+            with torch.amp.autocast('cuda' if self.device == 'cuda' else 'cpu', enabled=self.use_amp):
+                outputs = self.model(images, return_features=False)
 
-            # Compute losses
-            losses = self.loss_fn(outputs, labels)
+                # Compute losses
+                losses = self.loss_fn(outputs, labels)
 
             # Accumulate losses
             for key in val_losses.keys():
@@ -409,20 +415,23 @@ class TIGASTrainer:
                 new_lr=new_lr
             )
 
-        # Вычисляем конечную эпоху
+        # Calculate end epoch
         start_epoch = self.current_epoch
         if resume_from:
-            start_epoch += 1  # Начинаем со следующей эпохи
-            end_epoch = start_epoch + num_epochs  # num_epochs = сколько ЕЩЁ эпох
+            start_epoch += 1  # Start from next epoch
+            end_epoch = start_epoch + num_epochs  # num_epochs = how many MORE epochs
             print(f"Resuming from epoch {self.current_epoch}, will train {num_epochs} more epochs")
             print(f"Epochs: {start_epoch} -> {end_epoch - 1}")
         else:
-            end_epoch = num_epochs  # Без resume: num_epochs = всего эпох
+            end_epoch = num_epochs  # Without resume: num_epochs = total epochs
         
         print(f"Starting training for {num_epochs} epochs")
         print(f"Device: {self.device}")
         print(f"AMP: {self.use_amp}")
         print(f"Gradient accumulation: {self.gradient_accumulation_steps}")
+        
+        # Initialize val_losses to None before the loop to avoid undefined variable
+        val_losses = None
         
         for epoch in range(start_epoch, end_epoch):
             self.current_epoch = epoch
@@ -434,15 +443,13 @@ class TIGASTrainer:
             # Log training
             print(f"\nEpoch {epoch} - Train Loss: {train_losses['total']:.4f}")
             
-            # Update current_epoch только после завершения эпохи
-            # (для корректного resume если прервётся во время validation/save)
-            self.current_epoch = epoch
             if self.use_tensorboard:
                 for key, value in train_losses.items():
                     self.writer.add_scalar(f'train/{key}', value, epoch)
 
-            # Validate
-            if (epoch + 1) % self.validate_interval == 0:
+            # Validate at specified intervals
+            should_validate = (epoch + 1) % self.validate_interval == 0
+            if should_validate and self.val_loader is not None:
                 val_losses = self.validate()
                 if val_losses:
                     self.val_history.append(val_losses)
@@ -452,7 +459,7 @@ class TIGASTrainer:
                         for key, value in val_losses.items():
                             self.writer.add_scalar(f'val/{key}', value, epoch)
 
-                    # Early stopping
+                    # Early stopping check
                     if val_losses['total'] < self.best_val_loss:
                         self.best_val_loss = val_losses['total']
                         self.patience_counter = 0
@@ -464,16 +471,26 @@ class TIGASTrainer:
                         print(f"Early stopping triggered after {epoch + 1} epochs")
                         break
 
-            # Save checkpoint
+            # Save checkpoint at specified intervals
             if (epoch + 1) % self.save_interval == 0:
                 self.save_checkpoint(is_best=False)
 
-            # Step scheduler
+            # Step scheduler - handle different scheduler types correctly
             if self.scheduler:
                 if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    if val_losses:
+                    # ReduceLROnPlateau needs a metric - use val_loss if available, else train_loss
+                    if val_losses is not None and 'total' in val_losses:
                         self.scheduler.step(val_losses['total'])
+                    else:
+                        # Fallback to train loss if no validation was run this epoch
+                        self.scheduler.step(train_losses['total'])
+                elif isinstance(self.scheduler, torch.optim.lr_scheduler.OneCycleLR):
+                    # OneCycleLR is stepped every BATCH, not epoch
+                    # It should be stepped in train_epoch(), not here
+                    # Skip here to avoid double-stepping
+                    pass
                 else:
+                    # Most schedulers (CosineAnnealing, StepLR, etc.) step per epoch
                     self.scheduler.step()
 
             # Log LR
