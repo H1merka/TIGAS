@@ -365,24 +365,37 @@ class SpectralAnalyzer(nn.Module):
         with torch.amp.autocast('cuda', enabled=False):
             x_float = x.float()
             
+            # Clamp input to prevent extreme values
+            x_float = torch.clamp(x_float, -10.0, 10.0)
+            
             # 2D FFT (rfft2 for real input - more efficient)
             freq = torch.fft.rfft2(x_float, dim=(-2, -1))
             
             # Magnitude (log-scale for better dynamic range)
             freq_mag = torch.abs(freq)
+            # Clamp magnitude to prevent extreme values before log
+            freq_mag = torch.clamp(freq_mag, min=1e-8, max=1e6)
             freq_mag_log = torch.log1p(freq_mag)
+            # Additional clamp after log
+            freq_mag_log = torch.clamp(freq_mag_log, min=-20.0, max=20.0)
             
             # Phase (normalized to [-1, 1])
             freq_phase = torch.angle(freq) / np.pi
+            # Clamp phase (should already be in [-1, 1] but ensure)
+            freq_phase = torch.clamp(freq_phase, -1.0, 1.0)
             
             # Initialize coordinate grids
             self._compute_grids(H, W, x.device)
             
             # Compute radial power spectrum
             radial_spectrum = self._compute_radial_spectrum(freq_mag)
+            # Clamp radial spectrum
+            radial_spectrum = torch.clamp(radial_spectrum, min=0.0, max=1e6)
             
             # Compute azimuthal statistics
             azimuthal_stats = self._compute_azimuthal_stats(freq_mag)
+            # Replace NaN with zeros in azimuthal stats
+            azimuthal_stats = torch.nan_to_num(azimuthal_stats, nan=0.0, posinf=1e4, neginf=-1e4)
         
         # Interpolate magnitude to original size for conv processing
         freq_mag_spatial = F.interpolate(
@@ -419,8 +432,15 @@ class SpectralAnalyzer(nn.Module):
             azimuthal_stats.to(x.dtype)
         ], dim=1)
         
+        # Safety: replace any NaN/Inf in combined features
+        combined = torch.nan_to_num(combined, nan=0.0, posinf=1e4, neginf=-1e4)
+        
         # Project to output dimension
         output = self.projection(combined)
+        
+        # Final safety clamp
+        output = torch.clamp(output, -100.0, 100.0)
+        output = torch.nan_to_num(output, nan=0.0, posinf=100.0, neginf=-100.0)
         
         # Auxiliary outputs for analysis/debugging
         aux = {
@@ -572,7 +592,13 @@ class StatisticalMomentEstimator(nn.Module):
         median = feat_flat.median(dim=2).values
         skewness_approx = (mean - median) / std
         
+        # Clamp skewness to prevent extreme values
+        skewness_approx = torch.clamp(skewness_approx, -10.0, 10.0)
+        
         all_stats = torch.cat([mean, std, max_val, skewness_approx], dim=1)
+        
+        # Safety: replace NaN/Inf
+        all_stats = torch.nan_to_num(all_stats, nan=0.0, posinf=1e4, neginf=-1e4)
         
         return all_stats
 
@@ -621,8 +647,15 @@ class StatisticalMomentEstimator(nn.Module):
         # Combine all comparison features
         combined = torch.cat([all_stats, diff_scaled, interaction], dim=1)
         
+        # Safety: clamp combined features
+        combined = torch.nan_to_num(combined, nan=0.0, posinf=1e4, neginf=-1e4)
+        
         # Generate output through comparison network
         output = self.comparison_net(combined)
+        
+        # Final safety clamp
+        output = torch.clamp(output, -100.0, 100.0)
+        output = torch.nan_to_num(output, nan=0.0, posinf=100.0, neginf=-100.0)
         
         # Compute distance metrics for analysis
         l2_distance = torch.norm(diff, p=2, dim=1, keepdim=True)
